@@ -72,6 +72,14 @@ export const T2125_INCOME: CodeOption[] = [
   { code: '8000', label: 'Sales, commissions or fees', section: 'Income' },
   { code: '8230', label: 'Other income', section: 'Income' },
 ]
+// T2125 Part 4 — Cost of goods sold (kept separate from operating expenses so
+// the form shows gross profit).
+export const T2125_COGS: CodeOption[] = [
+  { code: '8320', label: 'Purchases during the year (net of returns)', section: 'Cost of goods sold' },
+  { code: '8340', label: 'Direct wage costs', section: 'Cost of goods sold' },
+  { code: '8360', label: 'Subcontracts', section: 'Cost of goods sold' },
+  { code: '8450', label: 'Other costs / materials', section: 'Cost of goods sold' },
+]
 export const T2125_EXPENSE: CodeOption[] = [
   { code: '8521', label: 'Advertising', section: 'Expenses' },
   { code: '8523', label: 'Meals and entertainment (50%)', section: 'Expenses' },
@@ -95,7 +103,9 @@ export const T2125_EXPENSE: CodeOption[] = [
   { code: '9936', label: 'Capital cost allowance (CCA)', section: 'Expenses' },
   { code: '9270', label: 'Other expenses', section: 'Expenses' },
 ]
-export const T2125_ALL = [...T2125_INCOME, ...T2125_EXPENSE]
+export const T2125_ALL = [...T2125_INCOME, ...T2125_COGS, ...T2125_EXPENSE]
+/** T2125 codes that belong in the Cost of goods sold section. */
+export const T2125_COGS_CODES = new Set(T2125_COGS.map((c) => c.code))
 
 // ---- Heuristic suggestions -------------------------------------------------
 
@@ -157,6 +167,11 @@ export function suggestT2125(a: Account): string | null {
   const n = a.name.toLowerCase()
   if (a.type === 'income') return '8000'
   if (a.type !== 'expense') return null
+  // Cost of goods sold (Part 4) — checked before operating expenses.
+  if (kw(n, 'cost of goods', 'cogs')) return '8320'
+  if (kw(n, 'purchase', 'materials', 'direct material')) return '8320'
+  if (kw(n, 'subcontract', 'sub-contract')) return '8360'
+  if (kw(n, 'direct labour', 'direct labor', 'direct wage')) return '8340'
   if (kw(n, 'advertis', 'marketing', 'promotion')) return '8521'
   if (kw(n, 'meal', 'entertain')) return '8523'
   if (kw(n, 'bad debt')) return '8590'
@@ -168,7 +183,7 @@ export function suggestT2125(a: Account): string | null {
   if (kw(n, 'management', 'admin')) return '8871'
   if (kw(n, 'rent', 'lease')) return '8910'
   if (kw(n, 'repair', 'maintenance')) return '8960'
-  if (kw(n, 'salar', 'wage', 'payroll', 'subcontract')) return '9060'
+  if (kw(n, 'salar', 'wage', 'payroll')) return '9060'
   if (kw(n, 'property tax')) return '9180'
   if (kw(n, 'travel')) return '9200'
   if (kw(n, 'utilit', 'hydro', 'phone', 'internet')) return '9220'

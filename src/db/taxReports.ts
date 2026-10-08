@@ -7,6 +7,7 @@ import {
   t2125Label,
   GIFI_INCOME,
   GIFI_BALANCE,
+  T2125_COGS_CODES,
 } from './taxCodes'
 import type { Account } from './types'
 
@@ -163,8 +164,13 @@ export function gifiBalanceSheet(companyId: number, asOf: string): GifiBalanceSh
 
 export interface T2125Summary {
   income: CodeTotal[]
+  /** Part 4 — Cost of goods sold, separated from operating expenses. */
+  cogs: CodeTotal[]
   expenses: CodeTotal[]
   grossIncome: number
+  totalCogs: number
+  /** grossIncome − totalCogs (T2125 line 8519). */
+  grossProfit: number
   totalExpenses: number
   netIncome: number
 }
@@ -173,8 +179,13 @@ export function t2125Summary(companyId: number, start: string, end: string): T21
   const { t2125 } = codeMaps(companyId)
   const pnl = profitAndLossRange(companyId, start, end)
   const income = group(pnl.income, (id) => t2125.get(id) ?? null, t2125Label)
-  const expenses = group(pnl.expenses, (id) => t2125.get(id) ?? null, t2125Label)
+  // Split P&L expenses into cost of goods sold vs. operating expenses by code.
+  const allExpenses = group(pnl.expenses, (id) => t2125.get(id) ?? null, t2125Label)
+  const cogs = allExpenses.filter((c) => T2125_COGS_CODES.has(c.code))
+  const expenses = allExpenses.filter((c) => !T2125_COGS_CODES.has(c.code))
   const grossIncome = income.reduce((s, c) => s + c.amount, 0)
+  const totalCogs = cogs.reduce((s, c) => s + c.amount, 0)
+  const grossProfit = grossIncome - totalCogs
   const totalExpenses = expenses.reduce((s, c) => s + c.amount, 0)
-  return { income, expenses, grossIncome, totalExpenses, netIncome: grossIncome - totalExpenses }
+  return { income, cogs, expenses, grossIncome, totalCogs, grossProfit, totalExpenses, netIncome: grossProfit - totalExpenses }
 }

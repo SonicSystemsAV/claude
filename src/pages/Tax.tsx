@@ -9,7 +9,7 @@ import {
   t2125Summary,
   type CodeTotal,
 } from '../db/taxReports'
-import { GIFI_INCOME, GIFI_BALANCE, T2125_INCOME, T2125_EXPENSE } from '../db/taxCodes'
+import { GIFI_INCOME, GIFI_BALANCE, T2125_INCOME, T2125_COGS, T2125_EXPENSE } from '../db/taxCodes'
 import { Money } from '../components/Money'
 import { formatMoney } from '../lib/money'
 import { todayISO } from '../lib/format'
@@ -114,6 +114,14 @@ function T2125View({ companyId, start, end }: { companyId: number; start: string
       <div className="px-5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Business income</div>
       <CodeRows rows={t.income} />
       <TotalRow label="8299 Gross business income" cents={t.grossIncome} />
+      {t.cogs.length > 0 && (
+        <>
+          <div className="px-5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Cost of goods sold</div>
+          <CodeRows rows={t.cogs} />
+          <TotalRow label="8518 Cost of goods sold" cents={t.totalCogs} />
+          <TotalRow label="8519 Gross profit" cents={t.grossProfit} />
+        </>
+      )}
       <div className="px-5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Expenses</div>
       <CodeRows rows={t.expenses} />
       <TotalRow label="9368 Total expenses" cents={t.totalExpenses} />
@@ -176,7 +184,7 @@ const TYPE_LABEL: Record<AccountType, string> = {
 function MappingView({ companyId, onChange }: { companyId: number; onChange: () => void }) {
   const map = getTaxMap(companyId)
   const gifiOpts = [...GIFI_INCOME, ...GIFI_BALANCE]
-  const t2125Opts = [...T2125_INCOME, ...T2125_EXPENSE]
+  const t2125Opts = [...T2125_INCOME, ...T2125_COGS, ...T2125_EXPENSE]
 
   return (
     <div className="space-y-2">
