@@ -1,4 +1,4 @@
-import { all, insert, tx } from './db'
+import { all, one, insert, tx } from './db'
 import { postTransaction, audit, getAccounts, getCompany } from './repo'
 import { formatMoney } from '../lib/money'
 
@@ -86,4 +86,133 @@ export function getInterCompanyLinks(companyId?: number): InterCompanyLink[] {
      ${where} ORDER BY l.id DESC`,
     params,
   )
+}
+
+// ---------------------------------------------------------------------------
+// Elimination / mismatch report (consolidated multi-entity view)
+//
+// postInterCompany() posts BOTH legs atomically and equal, so a group's books
+// start consistent. Drift only appears if someone later edits, voids, or
+// recycle-bins one leg. This report (a) verifies each link's two legs still
+// agree with the recorded amount, and (b) nets the inter-company positions per
+// company pair so consolidated statements can eliminate the double-count.
+// ---------------------------------------------------------------------------
+
+/** State of one leg (one company's posting) of an inter-company link. */
+export interface IntercoLegStatus {
+  txnId: number | null
+  /** Row exists and is not in the recycle bin. */
+  present: boolean
+  voided: boolean
+  /** The leg's magnitude = sum of its debit entries (equals the link amount when untouched). */
+  debitCents: number
+  /** present && !voided && debitCents === link.amount_cents. */
+  matchesLink: boolean
+}
+
+function legStatus(txnId: number | null, linkAmount: number): IntercoLegStatus {
+  if (txnId == null) return { txnId, present: false, voided: false, debitCents: 0, matchesLink: false }
+  const t = one<{ deleted: number; status: string }>('SELECT deleted, status FROM transactions WHERE id = ?', [txnId])
+  if (!t) return { txnId, present: false, voided: false, debitCents: 0, matchesLink: false }
+  const present = t.deleted === 0
+  const voided = t.status === 'void'
+  const d = one<{ s: number }>(
+    'SELECT COALESCE(SUM(CASE WHEN amount_cents > 0 THEN amount_cents ELSE 0 END), 0) AS s FROM entries WHERE transaction_id = ?',
+    [txnId],
+  )
+  const debitCents = d?.s ?? 0
+  return { txnId, present, voided, debitCents, matchesLink: present && !voided && debitCents === linkAmount }
+}
+
+export interface IntercoLinkCheck extends InterCompanyLink {
+  from: IntercoLegStatus
+  to: IntercoLegStatus
+  reconciled: boolean
+  /** Human-readable problems, empty when reconciled. */
+  issues: string[]
+}
+
+/** Verify both legs of every link (optionally only those touching `companyId`). */
+export function checkInterCompanyLinks(companyId?: number): IntercoLinkCheck[] {
+  return getInterCompanyLinks(companyId).map((l) => {
+    const from = legStatus(l.from_txn_id, l.amount_cents)
+    const to = legStatus(l.to_txn_id, l.amount_cents)
+    const issues: string[] = []
+    const check = (side: IntercoLegStatus, name: string) => {
+      if (!side.present) issues.push(`${name}: posting missing or in recycle bin`)
+      else if (side.voided) issues.push(`${name}: posting voided`)
+      else if (!side.matchesLink) issues.push(`${name}: amount is ${formatMoney(side.debitCents)}, link says ${formatMoney(l.amount_cents)}`)
+    }
+    check(from, l.from_name)
+    check(to, l.to_name)
+    return { ...l, from, to, reconciled: issues.length === 0, issues }
+  })
+}
+
+/** Netted inter-company position for one unordered company pair. */
+export interface IntercoPairElimination {
+  aId: number
+  aName: string
+  bId: number
+  bName: string
+  /** Receivables A holds against B (links posted from A → B), by link amount. */
+  aToB: number
+  /** Receivables B holds against A. */
+  bToA: number
+  /** aToB − bToA; positive means A is the net creditor of B. */
+  net: number
+  /** Gross amount removed from consolidated statements for this pair (aToB + bToA). */
+  eliminationCents: number
+  linkCount: number
+  mismatchCount: number
+}
+
+export interface IntercoEliminationReport {
+  pairs: IntercoPairElimination[]
+  /** Reconciled links whose legs disagree or are missing/voided. */
+  mismatches: IntercoLinkCheck[]
+  totalEliminated: number
+  mismatchCount: number
+}
+
+/**
+ * Consolidated elimination + mismatch report across the group (or a subset).
+ * Amounts use each link's recorded amount; any leg that no longer agrees is
+ * surfaced in `mismatches` and counted per pair, since those must be fixed
+ * before the elimination figures can be trusted.
+ */
+export function interCompanyEliminations(companyIds?: number[]): IntercoEliminationReport {
+  const checks = checkInterCompanyLinks()
+  const filter = companyIds && companyIds.length ? new Set(companyIds) : null
+  const pairMap = new Map<string, IntercoPairElimination>()
+  const mismatches: IntercoLinkCheck[] = []
+
+  for (const c of checks) {
+    if (filter && !(filter.has(c.from_company_id) && filter.has(c.to_company_id))) continue
+    // Stable unordered-pair key, ordered by company id.
+    const [aId, aName, bId, bName] =
+      c.from_company_id < c.to_company_id
+        ? [c.from_company_id, c.from_name, c.to_company_id, c.to_name]
+        : [c.to_company_id, c.to_name, c.from_company_id, c.from_name]
+    const key = `${aId}:${bId}`
+    const row =
+      pairMap.get(key) ??
+      { aId, aName, bId, bName, aToB: 0, bToA: 0, net: 0, eliminationCents: 0, linkCount: 0, mismatchCount: 0 }
+    row.linkCount++
+    if (c.from_company_id === aId) row.aToB += c.amount_cents
+    else row.bToA += c.amount_cents
+    if (!c.reconciled) { row.mismatchCount++; mismatches.push(c) }
+    pairMap.set(key, row)
+  }
+
+  const pairs = [...pairMap.values()]
+    .map((r) => ({ ...r, net: r.aToB - r.bToA, eliminationCents: r.aToB + r.bToA }))
+    .sort((x, y) => y.eliminationCents - x.eliminationCents)
+
+  return {
+    pairs,
+    mismatches,
+    totalEliminated: pairs.reduce((s, p) => s + p.eliminationCents, 0),
+    mismatchCount: mismatches.length,
+  }
 }
