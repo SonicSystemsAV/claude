@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sonic the Ledgerhog — Brand</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&amp;family=IBM+Plex+Mono:wght@400;500&amp;family=Nunito:wght@500..900&amp;family=Urbanist:wght@200;300;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#B84A1A}a:hover{color:#8A3612}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1000px; box-sizing: border-box; background: #F4F2EF; color: #141312; font-family: 'DM Sans', system-ui, sans-serif; padding: 40px 56px; display: flex; flex-direction: column; gap: 28px">
+
+<section aria-label="Lockup" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+<div style="background: #0B0B0B; border-radius: 20px; padding: 36px 32px 24px; display: flex; flex-direction: column; gap: 18px">
+<img src="../assets/logo-dark.png" alt="Sonic the Ledgerhog" style="width: 100%; height: auto; display: block">
+<span style="font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #9A958F">On dark · app menu, splash</span>
+</div>
+<div style="background: #FFFFFF; border: 1px solid #E4E0DA; border-radius: 20px; padding: 36px 32px 24px; display: flex; flex-direction: column; gap: 18px">
+<img src="../assets/logo-light.png" alt="Sonic the Ledgerhog" style="width: 100%; height: auto; display: block">
+<span style="font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #5E5A55">On light · invoices, reports, print</span>
+</div>
+</section>
+
+<section aria-label="Name options" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px">
+<sc-for list="{{names}}" as="n" hint-placeholder-count="4">
+<div style="background: #FFFFFF; border: 1px solid #E4E0DA; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+<div style="font-family: Nunito, sans-serif; font-weight: {{weight}}; font-size: 30px; line-height: 1; color: #0B0B0B; letter-spacing: -0.3px; white-space: nowrap">s<img src="../assets/coin-512.png" alt="o" style="display: inline-block; width: {{coin}}em; height: {{coin}}em; vertical-align: {{coinVA}}em; margin: 0 0.03em">nic<span style="font-family: Urbanist, sans-serif; font-weight: 300; color: #B84A1A; margin-left: 0.06em; letter-spacing: 0">{{n.word}}</span></div>
+<span style="font-size: 13px; color: #5E5A55">{{n.note}}</span>
+</div>
+</sc-for>
+</section>
+
+<div style="display: flex; gap: 40px; flex: 1; min-height: 0">
+<section aria-labelledby="pal" style="flex: 1.2; display: flex; flex-direction: column; gap: 16px">
+<h2 id="pal" style="margin: 0; font-family: Urbanist, sans-serif; font-weight: 600; font-size: 20px">Palette</h2>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+<sc-for list="{{swatches}}" as="s" hint-placeholder-count="8">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="height: 56px; border-radius: 10px; background: {{s.hex}}; border: 1px solid #E4E0DA"></div>
+<span style="font-size: 13px; font-weight: 500">{{s.name}}</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5E5A55">{{s.hex}} · {{s.use}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section aria-labelledby="typ" style="flex: 1; display: flex; flex-direction: column; gap: 16px">
+<h2 id="typ" style="margin: 0; font-family: Urbanist, sans-serif; font-weight: 600; font-size: 20px">Type &amp; elements</h2>
+<div style="background: #FFFFFF; border: 1px solid #E4E0DA; border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; gap: 14px"><span style="font-family: Urbanist, sans-serif; font-weight: 300; font-size: 34px">Balance sheet</span><span style="font-size: 12px; color: #5E5A55">Urbanist 300 · headings</span></div>
+<div style="display: flex; align-items: baseline; gap: 14px"><span style="font-size: 16px">Reconcile 14 items from RBC Business Chequing</span><span style="font-size: 12px; color: #5E5A55">DM Sans · interface</span></div>
+<div style="display: flex; align-items: baseline; gap: 14px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-variant-numeric: tabular-nums">48,320.00 <span style="color: #A8321E">(6,218.40)</span></span><span style="font-size: 12px; color: #5E5A55">Plex Mono · figures</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px; padding-top: 6px">
+<button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: {{accent}}; color: #0B0B0B; font: inherit; font-weight: 700">Post entry</button>
+<button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: #0B0B0B; color: #FFFFFF; font: inherit; font-weight: 500">Match</button>
+<button type="button" style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid #CFC9C1; background: #FFFFFF; color: #141312; font: inherit; font-weight: 500">Save draft</button>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<span style="font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; background: #E3F0EC; color: #17695A">Matched</span>
+<span style="font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; background: #FBE7DD; color: #8A3612">Review</span>
+<span style="font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; background: #EFECE7; color: #4A4642">Unposted</span>
+<span style="font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; background: #F6E1DE; color: #A8321E">Overdue</span>
+</div>
+</div>
+</section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#F26A32","options":["#F26A32","#D05824","#E8893D"]},"weight":{"editor":"range","default":700,"min":500,"max":900,"step":50,"section":"Wordmark"},"coinSize":{"editor":"range","default":1.05,"min":0.5,"max":1.5,"step":0.05,"unit":"em","section":"Wordmark"},"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#F26A32';
+    const weight = this.props.weight ?? 700;
+    const coin = this.props.coinSize ?? 1.05;
+    const coinVA = Math.round((0.24 - coin / 2) * 100) / 100;
+    return {
+      accent, weight, coin, coinVA,
+      names: [
+        { word: 'ledgerhog', note: 'Sonic the Ledgerhog. Playful, memorable, pairs with the mascot.' },
+        { word: 'ledger', note: 'Plain and professional; matches the double-entry core.' },
+        { word: 'ledgerly', note: 'Brands the Ledgerly app directly as a Sonic product.' },
+        { word: 'books', note: 'The original working name.' }
+      ],
+      swatches: [
+        { name: 'Sonic Black', hex: '#0B0B0B', use: 'nav, ink' },
+        { name: 'Sonic Orange', hex: '#F26A32', use: 'accent, CTA' },
+        { name: 'Ember', hex: '#D05824', use: 'coin core shade' },
+        { name: 'Link Orange', hex: '#B84A1A', use: 'text on light' },
+        { name: 'Ground', hex: '#F4F2EF', use: 'app background' },
+        { name: 'Coin Gold', hex: '#E9B44C', use: 'coin ring' },
+        { name: 'Credit', hex: '#17695A', use: 'money in' },
+        { name: 'Debit', hex: '#A8321E', use: 'money out' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+/* Sonic the Ledgerhog — fonts, CSS variables and component classes.
+   In src/index.css: replace the Inter/JetBrains import and the @layer components block with this file's contents
+   (or @import it before @tailwind directives). Requires the tailwind.sonic.js preset. */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=IBM+Plex+Mono:wght@400;500&family=Urbanist:wght@300;600&display=swap');
+
+:root {
+  --sonic-black: #0B0B0B;
+  --sonic-orange: #F26A32;
+  --sonic-ember: #D05824;
+  --sonic-link: #B84A1A;
+  --sonic-link-hover: #8A3612;
+  --ground: #F4F2EF;
+  --surface: #FFFFFF;
+  --rule: #E4E0DA;
+  --rule-soft: #EFECE7;
+  --control: #CFC9C1;
+  --ink: #141312;
+  --muted: #5E5A55;
+  --subtle: #9A958F;
+  --credit: #17695A;
+  --credit-bg: #E3F0EC;
+  --debit: #A8321E;
+  --debit-bg: #F6E1DE;
+  --review: #8A3612;
+  --review-bg: #FBE7DD;
+  --neutral: #4A4642;
+  --neutral-bg: #EFECE7;
+}
+
+@layer base {
+  body { @apply bg-ground text-ink font-sans antialiased; font-size: 15px; }
+  h1, h2, h3 { @apply font-display; }
+  a { color: var(--sonic-link); }
+  a:hover { color: var(--sonic-link-hover); }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 min-h-touch rounded-control px-[18px] text-[15px] font-medium transition
+           disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-sonic-orange text-sonic-black font-bold hover:bg-sonic-ember
+                 disabled:bg-rule disabled:text-[#6E6963]; }
+  .btn-dark    { @apply btn bg-sonic-black text-white hover:bg-nav-active; }
+  .btn-outline { @apply btn border border-control bg-surface text-ink hover:bg-ground; }
+  .btn-ghost   { @apply btn text-muted hover:bg-rule-soft; }
+
+  .card      { @apply rounded-card border border-rule bg-surface p-5; }
+  .card-dark { @apply rounded-card bg-sonic-black text-ground p-6; }
+
+  .page-title { @apply font-display text-page-title text-ink; }
+  .eyebrow    { @apply text-eyebrow uppercase text-muted; }
+  .section-title { @apply font-display font-semibold text-[20px]; }
+
+  .input { @apply min-h-touch rounded-control border border-control bg-surface px-3 text-ink; }
+  .label { @apply flex flex-col gap-1.5 text-[13px] text-muted; }
+
+  .th { @apply px-3 py-2.5 text-left text-[12px] font-medium uppercase tracking-[1px] text-muted border-b border-rule; }
+  .td { @apply px-3 py-3 text-[14px] border-b border-rule-soft; }
+  .num { @apply font-mono text-right; font-variant-numeric: tabular-nums; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .amt-in  { @apply num text-credit; }
+  .amt-out { @apply num text-debit; }
+
+  .badge { @apply inline-flex items-center rounded-badge px-2 py-1 text-[12px] font-bold; }
+  .badge-matched  { @apply badge bg-credit-bg text-credit; }
+  .badge-review   { @apply badge bg-review-bg text-review; }
+  .badge-unposted { @apply badge bg-neutral-bg text-neutral; }
+  .badge-overdue  { @apply badge bg-debit-bg text-debit; }
+
+  .sidebar { @apply flex flex-col gap-7 bg-sonic-black text-nav-text px-4 py-7; flex: 1 1 240px; }
+  .nav-item { @apply flex items-center gap-3 min-h-touch rounded-nav px-3 text-nav-text no-underline hover:bg-nav-active; }
+  .nav-item[aria-current='page'] { @apply bg-nav-active text-white font-medium; }
+  .nav-item[aria-current='page'] svg { color: var(--sonic-orange); }
+  .nav-pill { @apply ml-auto min-w-6 h-[22px] rounded-full bg-sonic-orange text-sonic-black text-[12px] font-bold flex items-center justify-center px-1.5; }
+}

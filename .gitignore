@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env.local
+.DS_Store
+src-tauri/target
+# Build artifacts / binaries
+Ledgerly.exe
+*.exe
+# Local backups and raw financial data (keep out of version control)
+*.sqlite
+*.sonicledger
+qbo-import/

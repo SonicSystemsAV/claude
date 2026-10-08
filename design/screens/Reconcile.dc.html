@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sonic-Books — Bank reconciliation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&amp;family=IBM+Plex+Mono:wght@400;500&amp;family=Nunito:wght@500..900&amp;family=Urbanist:wght@200;300;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#B84A1A}a:hover{color:#8A3612}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1000px; background: #F4F2EF; color: #141312; font-family: 'DM Sans', system-ui, sans-serif; font-size: 15px">
+
+<nav aria-label="Main" style="flex: 1 1 240px; background: #0B0B0B; color: #D9D6D2; padding: 28px 16px; display: flex; flex-direction: column; gap: 28px; box-sizing: border-box">
+<div style="padding: 0 8px"><img src="../assets/logo-dark.png" alt="Sonic the Ledgerhog" style="width: 100%; max-width: 220px; height: auto; display: block"></div>
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 0 4px">
+<label for="entity" style="font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; color: #9A958F">Entity</label>
+<select id="entity" style="min-height: 44px; border-radius: 8px; border: 1px solid #2E2B28; background: #161514; color: #FFFFFF; padding: 0 12px; font: inherit"><option>Sonic AV Corp</option><option>Sonic Automation</option><option>King St Corp</option></select>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<a href="Dashboard.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: #D9D6D2; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>Dashboard</a>
+<a href="Ledger.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: #D9D6D2; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v18H6.5A2.5 2.5 0 0 1 4 18.5"></path><path d="M8 7h8M8 11h8"></path></svg>General ledger</a>
+<a href="Journal.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: #D9D6D2; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>Journal entries</a>
+<a href="Reconcile.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; background: #1F1D1B; color: #FFFFFF; text-decoration: none; font-weight: 500"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{accent}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10h18L12 4Z"></path><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 21h18"></path></svg>Banking<span style="margin-left: auto; min-width: 24px; height: 22px; border-radius: 11px; background: {{accent}}; color: #0B0B0B; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{left}}</span></a>
+<a href="Invoices.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: #D9D6D2; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h9l5 5v15H6Z"></path><path d="M14 2v6h6M9 13h7M9 17h5"></path></svg>Invoices &amp; bills</a>
+<a href="Reports.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: #D9D6D2; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"></path><path d="M7 15l4-4 3 3 5-6"></path></svg>Reports</a>
+<a href="Audit.dc.html" style="display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: #D9D6D2; text-decoration: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6Z"></path><path d="M9 12l2 2 4-4"></path></svg>Audit trail</a>
+</div>
+<div style="margin-top: auto; padding: 16px 12px 0; border-top: 1px solid #2E2B28; font-size: 13px; color: #9A958F; display: flex; flex-direction: column; gap: 4px"><span style="color: #FFFFFF; font-weight: 500">Chris Stroesser</span><span>Fiscal year ends Dec 31</span></div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; padding: 32px 40px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 24px">
+<header style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 4px; margin-right: auto">
+<span style="font-size: 13px; letter-spacing: 1.2px; text-transform: uppercase; color: #5E5A55">Banking · Statement ending 2026-09-30</span>
+<h1 style="margin: 0; font-family: Urbanist, sans-serif; font-weight: 300; font-size: 40px; letter-spacing: -0.5px">Reconcile RBC Business Chequing</h1>
+</div>
+<button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #CFC9C1; background: #FFFFFF; font: inherit; font-weight: 500">Import statement</button>
+<button type="button" style="min-height: 44px; padding: 0 20px; border-radius: 10px; border: 0; background: #0B0B0B; color: #FFFFFF; font: inherit; font-weight: 500">Finish reconciliation</button>
+</header>
+
+<section aria-label="Balances" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
+<div style="background: #FFFFFF; border: 1px solid #E4E0DA; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 14px; color: #5E5A55">Statement balance</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 24px">39,112.34</span></div>
+<div style="background: #FFFFFF; border: 1px solid #E4E0DA; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 14px; color: #5E5A55">Cleared in books</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 24px">{{cleared}}</span></div>
+<div style="background: #0B0B0B; color: #FFFFFF; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 14px; color: #B5AEA6">Difference</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 24px; color: {{accent}}">{{diff}}</span></div>
+<div style="background: #FFFFFF; border: 1px solid #E4E0DA; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 10px"><span style="font-size: 14px; color: #5E5A55">Progress · {{done}} of {{total}} matched</span><div style="height: 10px; border-radius: 5px; background: #EFECE7; overflow: hidden"><div style="height: 10px; width: {{pct}}%; background: {{accent}}"></div></div></div>
+</section>
+
+<section aria-label="Bank feed" style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; padding: 0 4px; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #5E5A55"><span style="flex: 1 1 300px">From the bank</span><span style="flex: 1 1 300px">Suggested match in Sonic-Books</span><span style="flex: 0 0 240px">Action</span></div>
+<sc-for list="{{items}}" as="it" hint-placeholder-count="6">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; background: {{it.rowBg}}; border: 1px solid #E4E0DA; border-radius: 12px; padding: 14px 16px">
+<div style="flex: 1 1 300px; display: flex; align-items: center; gap: 14px; min-width: 0">
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: #5E5A55; white-space: nowrap">{{it.date}}</span>
+<span style="flex: 1; font-weight: 500; min-width: 0">{{it.bank}}</span>
+<span style="font-family: 'IBM Plex Mono', monospace; color: {{it.amtColor}}; white-space: nowrap">{{it.amt}}</span>
+</div>
+<div style="flex: 1 1 300px; display: flex; align-items: center; gap: 10px; min-width: 0">
+<span style="font-size: 12px; font-weight: 700; padding: 4px 8px; border-radius: 6px; background: {{it.confBg}}; color: {{it.confFg}}; white-space: nowrap">{{it.conf}}</span>
+<span style="color: #4A4642; font-size: 14px; min-width: 0">{{it.match}}</span>
+</div>
+<div style="flex: 0 0 240px; display: flex; gap: 8px">
+<sc-if value="{{it.open}}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{it.doMatch}}" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 0; background: {{accent}}; color: #0B0B0B; font: inherit; font-weight: 700">Match</button>
+<button type="button" style="min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid #CFC9C1; background: #FFFFFF; font: inherit; font-size: 14px">Categorize</button>
+<button type="button" style="min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid #CFC9C1; background: #FFFFFF; font: inherit; font-size: 14px">Split</button>
+</sc-if>
+<sc-if value="{{it.closed}}" hint-placeholder-val="{{ false }}">
+<button type="button" onClick="{{it.undo}}" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 0; background: transparent; color: #17695A; font: inherit; font-weight: 700">✓ Matched · Undo</button>
+</sc-if>
+</div>
+</div>
+</sc-for>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#F26A32","options":["#F26A32","#D05824","#E8893D","#0B0B0B"]},"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = { matched: {} }; }
+  renderVals() {
+    const accent = this.props.accent ?? '#F26A32';
+    const fmt = (n) => n.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const feed = [
+      ['2026-09-26', 'E-TRANSFER RECEIVED', 3250.00, 'INV-1042 · client progress payment', 'Exact'],
+      ['2026-09-27', 'POS PURCHASE FUEL', -88.40, 'New expense · 6200 Vehicle expenses', 'Rule'],
+      ['2026-09-28', 'PREAUTH DEBIT TELECOM', -164.95, 'BILL-0388 · internet & phones', 'Exact'],
+      ['2026-09-29', 'ONLINE BANKING TRANSFER', -1500.00, 'Transfer to 1020 Savings', 'Likely'],
+      ['2026-09-29', 'MOBILE DEPOSIT', 875.00, 'INV-1039 · service call', 'Exact'],
+      ['2026-09-30', 'MONTHLY FEE', -100.00, 'New expense · 6900 Bank fees', 'Rule']
+    ];
+    const base = 36840.69;
+    let clearedAmt = base;
+    const conf = { Exact: ['#E3F0EC', '#17695A'], Likely: ['#FBE7DD', '#8A3612'], Rule: ['#EFECE7', '#4A4642'] };
+    const items = feed.map(([date, bank, amt, match, c], i) => {
+      const m = !!this.state.matched[i];
+      if (m) clearedAmt += amt;
+      return {
+        date, bank, match, conf: c === 'Rule' ? 'Bank rule' : c + ' match',
+        amt: (amt > 0 ? '+' : '(') + fmt(Math.abs(amt)) + (amt > 0 ? '' : ')'),
+        amtColor: amt > 0 ? '#17695A' : '#A8321E',
+        confBg: conf[c][0], confFg: conf[c][1],
+        open: !m, closed: m, rowBg: m ? '#F7F5F2' : '#FFFFFF',
+        doMatch: () => this.setState({ matched: { ...this.state.matched, [i]: true } }),
+        undo: () => { const x = { ...this.state.matched }; delete x[i]; this.setState({ matched: x }); }
+      };
+    });
+    const done = Object.keys(this.state.matched).length;
+    const d = Math.round((39112.34 - clearedAmt) * 100) / 100;
+    return { accent, items, done, total: feed.length, left: 14 - done, pct: Math.round(done / feed.length * 100), cleared: fmt(clearedAmt), diff: fmt(d) };
+  }
+}
+</script>
+</body>
+</html>
