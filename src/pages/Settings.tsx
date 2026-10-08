@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard } from 'lucide-react'
+import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard, Bot } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
 import { isTauri } from '../lib/desktop'
@@ -11,6 +11,7 @@ import { formatDate } from '../lib/format'
 import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
 import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
+import { askAssistant, DEFAULT_ASSISTANT_MODEL } from '../db/assistant'
 import { formatMoney } from '../lib/money'
 import { CURRENCIES, DEFAULT_CURRENCY } from '../db/currency'
 import { listUsers, createUser, setUserRole, setUserActive, setUserPassword, deleteUser, type Role, type User } from '../db/users'
@@ -145,6 +146,7 @@ export default function Settings() {
       {isAdmin && <ManageCompaniesSection />}
       <QBOImportSection />
       <SquareConnectSection />
+      <AssistantSection />
       <TaxCodesSection />
       <PeriodLockSection />
       {isAdmin && <UsersSection />}
@@ -541,6 +543,102 @@ function PeriodLockSection() {
           <p className="text-xs text-slate-400">Only an administrator can change the period lock.</p>
         )}
         {note && <div className="rounded-lg bg-brand-50 px-4 py-2 text-sm text-brand-700">{note}</div>}
+      </div>
+    </Section>
+  )
+}
+
+const ASSISTANT_KEY_LS = 'sonic.assistant.apiKey'
+const ASSISTANT_MODEL_LS = 'sonic.assistant.model'
+
+function AssistantSection() {
+  const currentCompanyId = useStore((s) => s.currentCompanyId)
+  const [apiKey, setApiKey] = useState('')
+  const [model, setModel] = useState(DEFAULT_ASSISTANT_MODEL)
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      setApiKey(localStorage.getItem(ASSISTANT_KEY_LS) ?? '')
+      setModel(localStorage.getItem(ASSISTANT_MODEL_LS) ?? DEFAULT_ASSISTANT_MODEL)
+    } catch { /* storage blocked — leave defaults */ }
+  }, [])
+
+  function persist(key: string, mdl: string) {
+    try {
+      localStorage.setItem(ASSISTANT_KEY_LS, key)
+      localStorage.setItem(ASSISTANT_MODEL_LS, mdl)
+    } catch { /* ignore */ }
+  }
+
+  async function ask() {
+    if (currentCompanyId == null || !apiKey.trim() || !question.trim()) return
+    setBusy(true)
+    setError(null)
+    setAnswer(null)
+    try {
+      const res = await askAssistant({
+        companyId: currentCompanyId,
+        question: question.trim(),
+        config: { apiKey: apiKey.trim(), model },
+      })
+      setAnswer(res.text || '(no text returned)')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section
+      icon={<Bot size={18} />}
+      title="AI assistant (beta)"
+      subtitle="Ask questions about your books, answered by Claude using your own API key."
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <input
+            type="password"
+            className="col-span-2 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            placeholder="Anthropic API key (sk-ant-…)"
+            value={apiKey}
+            onChange={(e) => { setApiKey(e.target.value); persist(e.target.value, model) }}
+          />
+          <select
+            className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+            value={model}
+            onChange={(e) => { setModel(e.target.value); persist(apiKey, e.target.value) }}
+            title="Model"
+          >
+            <option value="claude-opus-5-5">Opus (best)</option>
+            <option value="claude-sonnet-5-5">Sonnet (cheaper)</option>
+            <option value="claude-haiku-5-5">Haiku (cheapest)</option>
+          </select>
+        </div>
+        <textarea
+          className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          rows={2}
+          placeholder="e.g. What were my top three expense accounts, and how much is unreconciled?"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+        />
+        <button className="btn-primary" disabled={busy || !apiKey.trim() || !question.trim() || currentCompanyId == null} onClick={ask}>
+          {busy ? 'Thinking…' : 'Ask'}
+        </button>
+
+        {error && <div className="rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</div>}
+        {answer && (
+          <div className="whitespace-pre-wrap rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-700">{answer}</div>
+        )}
+        <p className="text-xs text-slate-400">
+          Your key is stored on this device only (never in the book file) and is used to call Claude directly with a
+          read-only snapshot of this company’s books. Live calls run in the desktop app; in the browser this is a
+          dev-only path and will be blocked by the API’s cross-origin policy.
+        </p>
       </div>
     </Section>
   )
