@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock } from 'lucide-react'
+import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
 import { isTauri } from '../lib/desktop'
@@ -9,6 +9,8 @@ import { createCompany, listCompanies, getCompany, setLockedThrough, getAccounts
 import { getTaxCodes, createTaxCode, deleteTaxCode } from '../db/documents'
 import { formatDate } from '../lib/format'
 import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
+import { createSquareConnector } from '../db/payments/square'
+import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
 import { formatMoney } from '../lib/money'
 import { listUsers, createUser, setUserRole, setUserActive, setUserPassword, deleteUser, type Role, type User } from '../db/users'
 
@@ -126,6 +128,7 @@ export default function Settings() {
 
       {isAdmin && <ManageCompaniesSection />}
       <QBOImportSection />
+      <SquareConnectSection />
       <TaxCodesSection />
       <PeriodLockSection />
       {isAdmin && <UsersSection />}
@@ -522,6 +525,163 @@ function PeriodLockSection() {
           <p className="text-xs text-slate-400">Only an administrator can change the period lock.</p>
         )}
         {note && <div className="rounded-lg bg-brand-50 px-4 py-2 text-sm text-brand-700">{note}</div>}
+      </div>
+    </Section>
+  )
+}
+
+function SquareConnectSection() {
+  const currentCompanyId = useStore((s) => s.currentCompanyId)
+  const rev = useStore((s) => s.rev)
+  void rev
+  const [appId, setAppId] = useState('')
+  const [environment, setEnvironment] = useState<'sandbox' | 'production'>('sandbox')
+  const [bankAccountId, setBankAccountId] = useState<number | ''>('')
+  const today = new Date().toISOString().slice(0, 10)
+  const [start, setStart] = useState(`${today.slice(0, 4)}-01-01`)
+  const [end, setEnd] = useState(today)
+  const [status, setStatus] = useState<ConnectorStatus | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<ImportPaymentSummary | null>(null)
+
+  const bankAccounts =
+    currentCompanyId != null ? getAccounts(currentCompanyId).filter((a) => a.is_bank === 1) : []
+
+  // Browser build can't do OAuth or CORS-free HTTP — mirror the Book file fallback.
+  if (!isTauri()) {
+    return (
+      <Section
+        icon={<CreditCard size={18} />}
+        title="Connect to Square"
+        subtitle="Pull Square sales, fees, and payouts straight into your books."
+      >
+        <div className="rounded-lg border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
+          <strong>Desktop app required.</strong> Connecting to Square needs the desktop app — it holds the
+          secure sign-in and makes the API calls a browser can’t (Square doesn’t allow direct browser access).
+        </div>
+        <p className="mt-2 text-xs text-slate-400">
+          In the desktop app this is where you’ll sign in to Square once; afterwards each sync maps your Square
+          items, sales (income + tax), processing fees, and payouts into this company — payouts land in your
+          bank register ready to reconcile. Works the same for other processors (Stripe, Clover) as they’re added.
+        </p>
+      </Section>
+    )
+  }
+
+  async function connect() {
+    setError(null)
+    setBusy('Connecting…')
+    try {
+      const connector = createSquareConnector({ applicationId: appId.trim(), environment })
+      const st = await connector.connect()
+      setStatus(st)
+      if (st.state === 'error' && st.error) setError(st.error)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function sync() {
+    if (currentCompanyId == null || bankAccountId === '') return
+    setError(null)
+    setResult(null)
+    setBusy('Syncing…')
+    try {
+      const connector = createSquareConnector({ applicationId: appId.trim(), environment })
+      const summary = await importFromConnector(
+        currentCompanyId,
+        connector,
+        { start, end },
+        { bankAccountId: Number(bankAccountId) },
+      )
+      setResult(summary)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const connected = status?.state === 'connected'
+
+  return (
+    <Section
+      icon={<CreditCard size={18} />}
+      title="Connect to Square"
+      subtitle="Pull Square sales, fees, and payouts straight into your books."
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <input
+            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            placeholder="Square Application ID"
+            value={appId}
+            onChange={(e) => setAppId(e.target.value)}
+          />
+          <select
+            className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            value={environment}
+            onChange={(e) => setEnvironment(e.target.value as 'sandbox' | 'production')}
+          >
+            <option value="sandbox">Sandbox (testing)</option>
+            <option value="production">Production</option>
+          </select>
+        </div>
+        <button className="btn-outline" disabled={!!busy || !appId.trim()} onClick={connect}>
+          {busy === 'Connecting…' ? 'Connecting…' : connected ? 'Reconnect' : 'Connect to Square'}
+        </button>
+
+        {connected && (
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500">Deposit bank account</span>
+                <select
+                  className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+                  value={bankAccountId}
+                  onChange={(e) => setBankAccountId(e.target.value ? Number(e.target.value) : '')}
+                >
+                  <option value="">Select…</option>
+                  {bankAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500">From</span>
+                <input type="date" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" value={start} onChange={(e) => setStart(e.target.value)} />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-500">To</span>
+                <input type="date" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" value={end} onChange={(e) => setEnd(e.target.value)} />
+              </label>
+            </div>
+            <button className="btn-primary" disabled={!!busy || bankAccountId === ''} onClick={sync}>
+              {busy === 'Syncing…' ? 'Syncing…' : 'Sync Square sales'}
+            </button>
+          </>
+        )}
+
+        {error && <div className="rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</div>}
+        {result && (
+          <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <div className="font-semibold">Synced from Square ✓</div>
+            <ul className="mt-1 space-y-0.5 text-emerald-700">
+              <li>{result.payments.toLocaleString()} sales · {formatMoney(result.grossCents)} gross · {formatMoney(result.feeCents)} fees · {formatMoney(result.taxCents)} tax</li>
+              <li>{result.payouts.toLocaleString()} payouts · {formatMoney(result.payoutTotalCents)} to bank ({result.payoutsMatched} auto-matched)</li>
+              {result.itemsSynced > 0 && <li>{result.itemsSynced} new catalog item(s)</li>}
+              {result.roundingAdjustments > 0 && <li>{result.roundingAdjustments} rounding fix(es), net {formatMoney(result.roundingTotalCents)}</li>}
+            </ul>
+          </div>
+        )}
+        <p className="text-xs text-slate-400">
+          Square sales post as income + tax (payment method “Square”), processing fees as an expense, and
+          payouts as deposits in your bank register for reconciliation. Set up your Square app at{' '}
+          <span className="font-mono">developer.squareup.com</span>; start in Sandbox.
+        </p>
       </div>
     </Section>
   )
