@@ -12,6 +12,7 @@ import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
 import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
 import { formatMoney } from '../lib/money'
+import { CURRENCIES, DEFAULT_CURRENCY } from '../db/currency'
 import { listUsers, createUser, setUserRole, setUserActive, setUserPassword, deleteUser, type Role, type User } from '../db/users'
 
 export default function Settings() {
@@ -22,6 +23,7 @@ export default function Settings() {
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
+  const [newCurrency, setNewCurrency] = useState(DEFAULT_CURRENCY)
 
   function backup() {
     const bytes = exportBytes()
@@ -61,7 +63,7 @@ export default function Settings() {
 
   function addCompany() {
     if (!newName.trim()) return
-    const id = createCompany(newName.trim())
+    const id = createCompany(newName.trim(), undefined, newCurrency)
     setNewName('')
     reloadCompanies()
     setCompany(id)
@@ -120,10 +122,24 @@ export default function Settings() {
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && addCompany()}
           />
+          <select
+            className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+            value={newCurrency}
+            onChange={(e) => setNewCurrency(e.target.value)}
+            title="Base currency for this company's books"
+          >
+            {CURRENCIES.map((c) => (
+              <option key={c.code} value={c.code}>{c.code} — {c.symbol}</option>
+            ))}
+          </select>
           <button className="btn-primary" onClick={addCompany}>
             Create
           </button>
         </div>
+        <p className="mt-2 text-xs text-slate-400">
+          Base currency is fixed per set of books. Foreign-currency transactions within a company are coming;
+          the groundwork (conversion and FX gain/loss) is in place.
+        </p>
       </Section>
 
       {isAdmin && <ManageCompaniesSection />}
