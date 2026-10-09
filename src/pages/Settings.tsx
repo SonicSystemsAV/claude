@@ -659,7 +659,9 @@ function SquareConnectSection() {
   const rev = useStore((s) => s.rev)
   void rev
   const [appId, setAppId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
   const [environment, setEnvironment] = useState<'sandbox' | 'production'>('sandbox')
+  const [redirectPort] = useState(8787)
   const [bankAccountId, setBankAccountId] = useState<number | ''>('')
   const today = new Date().toISOString().slice(0, 10)
   const [start, setStart] = useState(`${today.slice(0, 4)}-01-01`)
@@ -668,6 +670,8 @@ function SquareConnectSection() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ImportPaymentSummary | null>(null)
+  const connectorRef = useRef<ReturnType<typeof createSquareConnector> | null>(null)
+  const redirectUri = `http://localhost:${redirectPort}/callback`
 
   const bankAccounts =
     currentCompanyId != null ? getAccounts(currentCompanyId).filter((a) => a.is_bank === 1) : []
@@ -697,8 +701,14 @@ function SquareConnectSection() {
     setError(null)
     setBusy('Connecting…')
     try {
-      const connector = createSquareConnector({ applicationId: appId.trim(), environment })
+      const connector = createSquareConnector({
+        applicationId: appId.trim(),
+        clientSecret: clientSecret.trim(),
+        environment,
+        redirectPort,
+      })
       const st = await connector.connect()
+      connectorRef.current = st.state === 'connected' ? connector : null
       setStatus(st)
       if (st.state === 'error' && st.error) setError(st.error)
     } catch (e) {
@@ -710,11 +720,12 @@ function SquareConnectSection() {
 
   async function sync() {
     if (currentCompanyId == null || bankAccountId === '') return
+    const connector = connectorRef.current
+    if (!connector) { setError('Connect to Square first.'); return }
     setError(null)
     setResult(null)
     setBusy('Syncing…')
     try {
-      const connector = createSquareConnector({ applicationId: appId.trim(), environment })
       const summary = await importFromConnector(
         currentCompanyId,
         connector,
@@ -754,7 +765,18 @@ function SquareConnectSection() {
             <option value="production">Production</option>
           </select>
         </div>
-        <button className="btn-outline" disabled={!!busy || !appId.trim()} onClick={connect}>
+        <input
+          type="password"
+          className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          placeholder="Square OAuth Application Secret"
+          value={clientSecret}
+          onChange={(e) => setClientSecret(e.target.value)}
+        />
+        <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          In your Square app’s OAuth settings, add this exact Redirect URL:{' '}
+          <span className="font-mono text-slate-700">{redirectUri}</span>
+        </div>
+        <button className="btn-outline" disabled={!!busy || !appId.trim() || !clientSecret.trim()} onClick={connect}>
           {busy === 'Connecting…' ? 'Connecting…' : connected ? 'Reconnect' : 'Connect to Square'}
         </button>
 

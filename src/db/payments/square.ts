@@ -109,7 +109,9 @@ export function mapOrderLineItems(order: SquareOrder | undefined): NormalizedLin
  * Tax comes from the order's total_tax_money; fee from processing_fee.
  */
 export function mapPayment(p: SquarePayment, order?: SquareOrder): NormalizedPayment {
-  const gross = p.total_money?.amount ?? p.amount_money.amount
+  // amount_money is the sale incl. tax but excl. tip; total_money adds tips.
+  // We book the sale (amount_money); TODO(sandbox): handle tips + refunds.
+  const gross = p.amount_money.amount
   const fee = sumFees(p)
   const tax = order?.total_tax_money?.amount ?? 0
   return {
@@ -152,19 +154,35 @@ function squareTender(sourceType?: string): string {
 export interface SquareConfig {
   /** Square OAuth client id (Application ID). Set per install, never committed. */
   applicationId: string
+  /** Square OAuth Application Secret (the merchant's own app; stays on-device). */
+  clientSecret: string
   /** 'sandbox' during development, 'production' once the app is approved. */
   environment: 'sandbox' | 'production'
-  /** Which Square location(s) to pull; empty = all locations on the merchant account. */
+  /** Loopback redirect port; must match the redirect URI registered at Square. Default 8787. */
+  redirectPort?: number
+  /** Restrict to a single Square location; empty pulls all the token can access. */
   locationIds?: string[]
 }
 
-/**
- * Where tokens live: the OS secure store (Windows Credential Manager via Tauri),
- * never in the book file or localStorage. The browser build can't hold them.
- */
+interface SquareTokens {
+  accessToken: string
+  refreshToken?: string
+  merchantId?: string
+  expiresAt?: string
+}
+
+const SQUARE_SCOPES = 'PAYMENTS_READ ORDERS_READ PAYOUTS_READ MERCHANT_PROFILE_READ'
+const DEFAULT_REDIRECT_PORT = 8787
+
+/** RFC3339 window covering whole calendar days. */
+function rangeToRfc3339(range: DateRange): { begin: string; end: string } {
+  return { begin: `${range.start}T00:00:00Z`, end: `${range.end}T23:59:59Z` }
+}
+
 export class SquareConnector implements PaymentConnector {
   readonly provider = 'square'
   private state: ConnectorStatus
+  private tokens: SquareTokens | null = null
 
   constructor(private config: SquareConfig) {
     this.state = { provider: 'square', state: 'disconnected', accountLabel: null, error: null }
@@ -174,87 +192,125 @@ export class SquareConnector implements PaymentConnector {
     return this.state
   }
 
+  /** Preload tokens obtained earlier (e.g. restored from a prior connect). */
+  setTokens(tokens: SquareTokens): void {
+    this.tokens = tokens
+    this.state = { provider: 'square', state: 'connected', accountLabel: tokens.merchantId ?? 'Square', error: null }
+  }
+
+  get redirectUri(): string {
+    return `http://localhost:${this.config.redirectPort ?? DEFAULT_REDIRECT_PORT}/callback`
+  }
+
   /**
-   * Start the OAuth code+PKCE flow. Desktop-only.
-   *
-   * TODO(desktop/tauri): invoke the Rust side to
-   *   1. spin up a loopback listener on http://localhost:<port>/callback,
-   *   2. open the system browser to Square's authorize URL (scopes:
-   *      PAYMENTS_READ, ORDERS_READ, PAYOUTS_READ, MERCHANT_PROFILE_READ)
-   *      with a PKCE code_challenge,
-   *   3. catch the redirect, exchange code (+verifier) for access+refresh
-   *      tokens via Square's /oauth2/token (directly if Square allows a public
-   *      client, else through a tiny token-exchange proxy — mirror the QBO
-   *      B3a/B3b decision in docs/QUICKBOOKS_AND_DATA_FILES.md),
-   *   4. store the refresh token in the OS secure store, keyed by merchant id.
+   * Run Square's authorization-code OAuth flow via the Tauri `square_oauth`
+   * command (loopback listener + browser + token exchange). Desktop-only.
    */
   async connect(): Promise<ConnectorStatus> {
     if (!isTauri()) {
-      this.state = {
-        provider: 'square',
-        state: 'error',
-        error: 'Connecting to Square requires the desktop app (OAuth needs a local redirect listener and CORS-free HTTP).',
+      this.state = { provider: 'square', state: 'error', error: 'Connecting to Square requires the desktop app (OAuth needs a local redirect listener and CORS-free HTTP).' }
+      return this.state
+    }
+    if (!this.config.applicationId.trim() || !this.config.clientSecret.trim()) {
+      this.state = { provider: 'square', state: 'error', error: 'Enter your Square Application ID and secret first.' }
+      return this.state
+    }
+    this.state = { provider: 'square', state: 'connecting', accountLabel: null, error: null }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const res = await invoke<{ access_token: string; refresh_token?: string; merchant_id?: string; expires_at?: string }>(
+        'square_oauth',
+        {
+          clientId: this.config.applicationId.trim(),
+          clientSecret: this.config.clientSecret.trim(),
+          environment: this.config.environment,
+          redirectPort: this.config.redirectPort ?? DEFAULT_REDIRECT_PORT,
+          scopes: SQUARE_SCOPES,
+        },
+      )
+      this.tokens = {
+        accessToken: res.access_token,
+        refreshToken: res.refresh_token,
+        merchantId: res.merchant_id,
+        expiresAt: res.expires_at,
       }
-      return this.state
-    }
-    if (!this.config.applicationId.trim()) {
-      this.state = { provider: 'square', state: 'error', error: 'Missing Square Application ID. Add it in Settings → Connect to Square.' }
-      return this.state
-    }
-    // TODO(desktop): call into Tauri Rust to run the flow described above, using
-    // this.config.environment ('sandbox' vs 'production') to pick Square's base URL.
-    this.state = {
-      provider: 'square',
-      state: 'error',
-      error: `Square OAuth not yet implemented (desktop Tauri layer pending; env: ${this.config.environment}).`,
+      this.state = { provider: 'square', state: 'connected', accountLabel: res.merchant_id ?? 'Square', error: null }
+    } catch (e) {
+      this.state = { provider: 'square', state: 'error', error: e instanceof Error ? e.message : String(e) }
     }
     return this.state
   }
 
   async disconnect(): Promise<void> {
-    // TODO(desktop): revoke token via Square /oauth2/revoke and clear the secure store.
+    // TODO: revoke the token via Square /oauth2/revoke before clearing.
+    this.tokens = null
     this.state = { provider: 'square', state: 'disconnected', accountLabel: null, error: null }
   }
 
-  /**
-   * Pull payments in the range, each enriched with its order (for line items + tax).
-   *
-   * TODO(desktop): via Tauri Rust HTTP (no CORS in Rust), with a valid access token:
-   *   • GET /v2/payments?begin_time&end_time&location_id (paginate on `cursor`)
-   *   • for each payment with an order_id, GET /v2/orders/{id} (or BatchRetrieveOrders)
-   *   • map each with mapPayment(payment, order)
-   * Pull in bounded windows (e.g. by month) and report progress, like the QBO GL pull.
-   */
-  async listPayments(_range: DateRange): Promise<NormalizedPayment[]> {
-    this.assertReady()
-    // TODO(desktop): real fetch. Returns [] until the Tauri HTTP layer exists.
-    return []
+  private async api<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+    if (!this.tokens) throw new Error('Not connected to Square. Run Connect first.')
+    const { invoke } = await import('@tauri-apps/api/core')
+    return invoke<T>('square_api', {
+      environment: this.config.environment,
+      accessToken: this.tokens.accessToken,
+      method,
+      path,
+      body: body ?? null,
+    })
   }
 
-  /**
-   * Pull payouts in the range.
-   *
-   * TODO(desktop): GET /v2/payouts?begin_time&end_time&location_id (paginate),
-   * map each with mapPayout(). Optionally GET /v2/payouts/{id}/payout-entries to
-   * populate paymentIds so a payout can be traced back to its sales.
-   */
-  async listPayouts(_range: DateRange): Promise<NormalizedPayout[]> {
+  private locationParam(): string {
+    const ids = this.config.locationIds
+    return ids && ids.length === 1 ? `&location_id=${encodeURIComponent(ids[0])}` : ''
+  }
+
+  /** Pull payments in the range, enriched with their orders (line items + tax). */
+  async listPayments(range: DateRange): Promise<NormalizedPayment[]> {
     this.assertReady()
-    // TODO(desktop): real fetch. Returns [] until the Tauri HTTP layer exists.
-    return []
+    const { begin, end } = rangeToRfc3339(range)
+    const payments: SquarePayment[] = []
+    let cursor: string | undefined
+    do {
+      const q = `/v2/payments?begin_time=${begin}&end_time=${end}&sort_order=ASC&limit=100${this.locationParam()}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      const page = await this.api<{ payments?: SquarePayment[]; cursor?: string }>('GET', q)
+      payments.push(...(page.payments ?? []))
+      cursor = page.cursor
+    } while (cursor)
+
+    // Batch-retrieve the orders for line items + tax (up to 100 ids per call).
+    const orderIds = [...new Set(payments.map((p) => p.order_id).filter((x): x is string => !!x))]
+    const orderMap = new Map<string, SquareOrder>()
+    for (let i = 0; i < orderIds.length; i += 100) {
+      const chunk = orderIds.slice(i, i + 100)
+      const res = await this.api<{ orders?: SquareOrder[] }>('POST', '/v2/orders/batch-retrieve', { order_ids: chunk })
+      for (const o of res.orders ?? []) orderMap.set(o.id, o)
+    }
+
+    return payments.map((p) => mapPayment(p, p.order_id ? orderMap.get(p.order_id) : undefined))
+  }
+
+  /** Pull payouts (bank deposits) in the range, excluding failed ones. */
+  async listPayouts(range: DateRange): Promise<NormalizedPayout[]> {
+    this.assertReady()
+    const { begin, end } = rangeToRfc3339(range)
+    const payouts: SquarePayout[] = []
+    let cursor: string | undefined
+    do {
+      const q = `/v2/payouts?begin_time=${begin}&end_time=${end}&sort_order=ASC&limit=100${this.locationParam()}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      const page = await this.api<{ payouts?: SquarePayout[]; cursor?: string }>('GET', q)
+      payouts.push(...(page.payouts ?? []))
+      cursor = page.cursor
+    } while (cursor)
+    return payouts.filter((p) => (p.status ?? '').toUpperCase() !== 'FAILED').map(mapPayout)
   }
 
   private assertReady(): void {
-    if (!isTauri()) {
-      throw new Error('Square sync requires the desktop app (CORS-free HTTP + stored tokens).')
-    }
-    if (this.state.state !== 'connected') {
-      throw new Error('Not connected to Square. Run Connect first.')
-    }
+    if (!isTauri()) throw new Error('Square sync requires the desktop app (CORS-free HTTP + stored tokens).')
+    if (this.state.state !== 'connected' || !this.tokens) throw new Error('Not connected to Square. Run Connect first.')
   }
 }
 
 /** Factory so callers don't import the class directly. */
-export function createSquareConnector(config: SquareConfig): PaymentConnector {
+export function createSquareConnector(config: SquareConfig): SquareConnector {
   return new SquareConnector(config)
 }

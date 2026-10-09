@@ -1,11 +1,16 @@
 mod assistant;
+mod square;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_fs::init())
-    .invoke_handler(tauri::generate_handler![assistant::assistant_chat])
+    .invoke_handler(tauri::generate_handler![
+      assistant::assistant_chat,
+      square::square_oauth,
+      square::square_api
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

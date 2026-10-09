@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bot, X, Send, Loader2 } from 'lucide-react'
+import { X, Send, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '../state/store'
 import { askAssistant, loadAssistantConfig, type AnthropicMessage } from '../db/assistant'
+import coin from '../assets/coin-512.png'
 
 /**
  * Floating assistant available on every page. Reads the per-device config
@@ -50,9 +51,9 @@ export default function AssistantWidget() {
       <button
         onClick={() => setOpen(true)}
         title="Ask the assistant"
-        className="fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-brand-600 text-white shadow-lg transition hover:bg-brand-700"
+        className="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-white shadow-lg ring-1 ring-slate-200 transition hover:scale-105"
       >
-        <Bot size={22} />
+        <img src={coin} alt="Assistant" className="h-10 w-10" />
       </button>
     )
   }
@@ -61,7 +62,7 @@ export default function AssistantWidget() {
     <div className="fixed bottom-5 right-5 z-50 flex h-[32rem] max-h-[80vh] w-[22rem] max-w-[calc(100vw-2.5rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
       <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-          <Bot size={16} className="text-brand-600" /> Assistant
+          <img src={coin} alt="" className="h-5 w-5" /> Assistant
           <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">beta</span>
         </div>
         <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600" title="Close"><X size={18} /></button>
