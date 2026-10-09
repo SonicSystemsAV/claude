@@ -7,6 +7,7 @@
 import { all, one } from './db'
 import { getCompany, getCompanyProfile } from './repo'
 import { getDocument } from './documents'
+import { formatDate } from '../lib/format'
 import type { DocType, Contact } from './types'
 import {
   invoiceHtml,
@@ -97,8 +98,8 @@ export function buildDocumentData(docId: number): PrintDocumentData {
       email: contact?.email ?? null,
     },
     number: doc.number ?? String(doc.id),
-    date: doc.date,
-    dueDate: doc.due_date,
+    date: formatDate(doc.date),
+    dueDate: doc.due_date ? formatDate(doc.due_date) : null,
     paymentMethod: doc.payment_method,
     status: doc.status,
     currency: company.base_currency,
@@ -155,7 +156,7 @@ export function buildStatementData(companyId: number, contactId: number, mode: '
     const payment = d.type === payType ? d.total_cents : 0
     balance += charge - payment
     rows.push({
-      date: d.date,
+      date: formatDate(d.date),
       description: KIND_LABEL[d.type],
       number: d.number ?? '',
       chargeCents: charge,
@@ -168,8 +169,8 @@ export function buildStatementData(companyId: number, contactId: number, mode: '
     company: companyHeader(companyId),
     party: { name: contact?.name ?? '', addressLines: addressLines(contact), email: contact?.email ?? null },
     heading: 'Statement of Account',
-    start,
-    end,
+    start: formatDate(start),
+    end: formatDate(end),
     currency: company.base_currency,
     openingBalanceCents: opening,
     rows,
@@ -195,7 +196,7 @@ export function previewLetterhead(companyId: number): void {
       email: 'accounts@example.com',
     },
     number: 'INV-PREVIEW',
-    date: new Date().toISOString().slice(0, 10),
+    date: formatDate(new Date().toISOString().slice(0, 10)),
     dueDate: null,
     paymentMethod: null,
     status: 'open',

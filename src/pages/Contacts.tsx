@@ -9,7 +9,7 @@ import type { Contact, ContactKind, DocType } from '../db/types'
 import { Money } from '../components/Money'
 import { ContactForm } from '../components/ContactForm'
 import { DocumentForm } from '../components/DocumentForm'
-import { formatDate } from '../lib/format'
+import { formatDate, todayISO } from '../lib/format'
 
 type Filter = 'all' | 'customer' | 'supplier'
 type ColKey = 'type' | 'txns' | 'volume' | 'balance' | 'last'
@@ -166,6 +166,9 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
   const [editDoc, setEditDoc] = useState<DocumentEditData | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [note, setNote] = useState<string | null>(null)
+  const [showStmt, setShowStmt] = useState(false)
+  const [stmtStart, setStmtStart] = useState(`${new Date().getFullYear()}-01-01`)
+  const [stmtEnd, setStmtEnd] = useState(todayISO())
 
   if (!contact) {
     return <div className="mx-auto max-w-5xl p-6"><button className="btn-ghost" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="mt-4 text-slate-500">Contact not found.</p></div>
@@ -224,11 +227,7 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            className="btn-outline"
-            title="Statement of account (year to date) — print or save as PDF"
-            onClick={() => printStatement(companyId, id, isSupplier && !isCustomer ? 'ap' : 'ar', `${new Date().getFullYear()}-01-01`, new Date().toISOString().slice(0, 10))}
-          >
+          <button className="btn-outline" title="Statement of account — choose a date range, print or save as PDF" onClick={() => setShowStmt((v) => !v)}>
             <Printer size={15} /> Statement
           </button>
           {canEdit && <button className="btn-outline" onClick={() => setEditing(true)}><Pencil size={15} /> Edit</button>}
@@ -236,6 +235,21 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
           {canEdit && isSupplier && <button className="btn-primary" onClick={() => setNewDoc(isCustomer ? 'bill' : 'expense')}><Plus size={15} /> {isCustomer ? 'Bill' : 'Expense'}</button>}
         </div>
       </div>
+
+      {showStmt && (
+        <div className="card flex flex-wrap items-center gap-2 p-3 text-sm text-slate-600">
+          <span className="text-xs font-medium text-slate-500">Statement from</span>
+          <input type="date" className="rounded-md border border-slate-300 px-2 py-1" value={stmtStart} onChange={(e) => setStmtStart(e.target.value)} />
+          <span className="text-xs font-medium text-slate-500">to</span>
+          <input type="date" className="rounded-md border border-slate-300 px-2 py-1" value={stmtEnd} onChange={(e) => setStmtEnd(e.target.value)} />
+          <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { setStmtStart(`${new Date().getFullYear()}-01-01`); setStmtEnd(todayISO()) }}>This year</button>
+          <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { const y = new Date().getFullYear() - 1; setStmtStart(`${y}-01-01`); setStmtEnd(`${y}-12-31`) }}>Last year</button>
+          <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { setStmtStart('2000-01-01'); setStmtEnd(todayISO()) }}>All dates</button>
+          <button className="btn-primary ml-auto" onClick={() => printStatement(companyId, id, isSupplier && !isCustomer ? 'ap' : 'ar', stmtStart, stmtEnd)}>
+            <Printer size={14} /> Print / Save PDF
+          </button>
+        </div>
+      )}
 
       {note && <div className="rounded-lg bg-brand-50 px-4 py-2 text-sm text-brand-700">{note}</div>}
 

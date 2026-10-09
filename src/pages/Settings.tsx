@@ -7,7 +7,7 @@ import { exportBytes, importBytes, resetDatabase } from '../db/db'
 import { seedIfEmpty } from '../db/seed'
 import { createCompany, listCompanies, getCompany, setLockedThrough, getAccounts, deleteCompany, getCompanyProfile, saveCompanyProfile, type CompanyProfileInput } from '../db/repo'
 import { getTaxCodes, createTaxCode, deleteTaxCode } from '../db/documents'
-import { formatDate } from '../lib/format'
+import { formatDate, DATE_FORMATS, getDateFormatId, setDateFormat } from '../lib/format'
 import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
 import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
@@ -85,6 +85,7 @@ export default function Settings() {
       )}
 
       <BookFileSection />
+      <PreferencesSection />
 
       <Section icon={<Database size={18} />} title="Data" subtitle="Back up, restore, or reset.">
         <div className="flex flex-wrap gap-2">
@@ -910,6 +911,26 @@ const EMPTY_PROFILE: ProfileForm = {
   display_name: '', address_line1: '', address_line2: '', city: '', province: '', postal: '',
   country: '', phone: '', email: '', website: '', tax_number: '', footer_note: '',
   use_letterhead: true, logo_data_url: null,
+}
+
+function PreferencesSection() {
+  const refresh = useStore((s) => s.refresh)
+  const [fmt, setFmt] = useState(getDateFormatId())
+  return (
+    <Section icon={<Clock size={18} />} title="Preferences" subtitle="Display options for this device.">
+      <label className="block text-sm">
+        <span className="mb-1 block text-xs font-medium text-slate-500">Date format</span>
+        <select
+          className="w-full max-w-sm rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          value={fmt}
+          onChange={(e) => { setDateFormat(e.target.value); setFmt(e.target.value); refresh() }}
+        >
+          {DATE_FORMATS.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+        </select>
+      </label>
+      <p className="mt-2 text-xs text-slate-400">Applied consistently everywhere — lists, reports, and printed documents.</p>
+    </Section>
+  )
 }
 
 function CompanyProfileSection() {

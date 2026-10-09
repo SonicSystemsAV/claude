@@ -284,7 +284,7 @@ export interface TransactionWithEntries extends Transaction {
 
 export function getTransactions(
   companyId: number,
-  opts: { limit?: number; accountId?: number; contactId?: number } = {},
+  opts: { limit?: number; accountId?: number; contactId?: number; startDate?: string; endDate?: string } = {},
 ): TransactionWithEntries[] {
   const params: unknown[] = [companyId]
   let where = 't.company_id = ? AND t.deleted = 0'
@@ -295,6 +295,14 @@ export function getTransactions(
   if (opts.contactId) {
     where += ' AND t.contact_id = ?'
     params.push(opts.contactId)
+  }
+  if (opts.startDate) {
+    where += ' AND t.date >= ?'
+    params.push(opts.startDate)
+  }
+  if (opts.endDate) {
+    where += ' AND t.date <= ?'
+    params.push(opts.endDate)
   }
   let sql = `SELECT t.*, c.name AS contact_name
              FROM transactions t LEFT JOIN contacts c ON c.id = t.contact_id

@@ -7,7 +7,7 @@ import { getTransactions, getContact, softDeleteTransactions } from '../db/repo'
 import { Money } from '../components/Money'
 import { JournalEntryForm } from '../components/JournalEntryForm'
 import { useTransactionOpener } from '../components/useTransactionOpener'
-import { formatDate } from '../lib/format'
+import { formatDate, todayISO } from '../lib/format'
 
 const SOURCE_BADGE: Record<string, string> = {
   manual: 'bg-slate-100 text-slate-500',
@@ -27,13 +27,16 @@ export default function Transactions() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [newJournal, setNewJournal] = useState(false)
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
   const [searchParams, setSearchParams] = useSearchParams()
   const { openTransaction, element: openerEl } = useTransactionOpener(companyId ?? 0, refresh)
   if (companyId == null) return null
 
   const contactId = searchParams.get('contact') ? Number(searchParams.get('contact')) : undefined
   const contact = contactId ? getContact(contactId) : undefined
-  const txns = getTransactions(companyId, { limit: 1000, contactId })
+  // No row cap — the full ledger is shown; narrow with the date range.
+  const txns = getTransactions(companyId, { contactId, startDate: start || undefined, endDate: end || undefined })
 
   function toggle(id: number) {
     setOpen((prev) => {
@@ -71,6 +74,16 @@ export default function Transactions() {
           <p className="text-sm text-slate-500">{txns.length} shown · click a row to see the entries</p>
         </div>
         {canEdit && <button className="btn-primary" onClick={() => setNewJournal(true)}><Plus size={16} /> New journal entry</button>}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+        <span className="text-xs font-medium text-slate-500">From</span>
+        <input type="date" className="rounded-md border border-slate-300 px-2 py-1" value={start} onChange={(e) => setStart(e.target.value)} />
+        <span className="text-xs font-medium text-slate-500">To</span>
+        <input type="date" className="rounded-md border border-slate-300 px-2 py-1" value={end} onChange={(e) => setEnd(e.target.value)} />
+        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { setStart(`${new Date().getFullYear()}-01-01`); setEnd(todayISO()) }}>This year</button>
+        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { const d = new Date(); setStart(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`); setEnd(todayISO()) }}>This month</button>
+        {(start || end) && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { setStart(''); setEnd('') }}>Clear</button>}
       </div>
 
       {contact && (
