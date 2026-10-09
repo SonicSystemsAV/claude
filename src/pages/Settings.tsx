@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard, Bot } from 'lucide-react'
+import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard, Bot, Link2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
 import { isTauri } from '../lib/desktop'
@@ -12,6 +12,7 @@ import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
 import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
 import { askAssistant, DEFAULT_ASSISTANT_MODEL, ASSISTANT_LS_KEYS } from '../db/assistant'
+import { createQuickBooksConnector, QBO_DEFAULT_REDIRECT_PORT, type QboConnectStatus } from '../db/qboLive'
 import { formatMoney } from '../lib/money'
 import { CURRENCIES, DEFAULT_CURRENCY } from '../db/currency'
 import { listUsers, createUser, setUserRole, setUserActive, setUserPassword, deleteUser, type Role, type User } from '../db/users'
@@ -145,6 +146,7 @@ export default function Settings() {
 
       {isAdmin && <ManageCompaniesSection />}
       <QBOImportSection />
+      <QBOLiveSection />
       <SquareConnectSection />
       <AssistantSection />
       <TaxCodesSection />
@@ -879,6 +881,170 @@ function SquareConnectSection() {
           Square sales post as income + tax (payment method “Square”), processing fees as an expense, and
           payouts as deposits in your bank register for reconciliation. Set up your Square app at{' '}
           <span className="font-mono">developer.squareup.com</span>; start in Sandbox.
+        </p>
+      </div>
+    </Section>
+  )
+}
+
+function QBOLiveSection() {
+  const reloadCompanies = useStore((s) => s.reloadCompanies)
+  const setCompany = useStore((s) => s.setCompany)
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [environment, setEnvironment] = useState<'sandbox' | 'production'>('sandbox')
+  const [name, setName] = useState('')
+  const today = new Date().toISOString().slice(0, 10)
+  const [start, setStart] = useState(`${today.slice(0, 4)}-01-01`)
+  const [end, setEnd] = useState(today)
+  const [status, setStatus] = useState<QboConnectStatus | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<QBOImportSummary | null>(null)
+  const connectorRef = useRef<ReturnType<typeof createQuickBooksConnector> | null>(null)
+  const redirectUri = `http://localhost:${QBO_DEFAULT_REDIRECT_PORT}/callback`
+
+  // Per-device persistence (secret + refresh token on this machine only).
+  const QK = { id: 'sonic.qbo.clientId', secret: 'sonic.qbo.secret', env: 'sonic.qbo.env', tokens: 'sonic.qbo.tokens' }
+  const saveTokens = (t: unknown) => { try { localStorage.setItem(QK.tokens, JSON.stringify(t)) } catch { /* ignore */ } }
+
+  useEffect(() => {
+    try {
+      const ci = localStorage.getItem(QK.id) ?? ''
+      const cs = localStorage.getItem(QK.secret) ?? ''
+      const ce = (localStorage.getItem(QK.env) as 'sandbox' | 'production') || 'sandbox'
+      if (ci) setClientId(ci)
+      if (cs) setClientSecret(cs)
+      setEnvironment(ce)
+      const st = localStorage.getItem(QK.tokens)
+      if (st && ci && isTauri()) {
+        const connector = createQuickBooksConnector({ clientId: ci, clientSecret: cs, environment: ce })
+        connector.onTokensChanged(saveTokens)
+        connector.setTokens(JSON.parse(st))
+        connectorRef.current = connector
+        setStatus(connector.status())
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (!isTauri()) {
+    return (
+      <Section icon={<Link2 size={18} />} title="Connect to QuickBooks (live)" subtitle="Import directly from QuickBooks Online over the API.">
+        <div className="rounded-lg border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500">
+          <strong>Desktop app required.</strong> The live QuickBooks sign-in and API pull run in the desktop app
+          (QuickBooks blocks direct browser access). In the browser you can still use the CSV import above.
+        </div>
+      </Section>
+    )
+  }
+
+  async function connect() {
+    setError(null)
+    setBusy('Connecting…')
+    try {
+      const connector = createQuickBooksConnector({ clientId: clientId.trim(), clientSecret: clientSecret.trim(), environment })
+      connector.onTokensChanged(saveTokens)
+      const st = await connector.connect()
+      if (st.state === 'connected') {
+        connectorRef.current = connector
+        try {
+          localStorage.setItem(QK.id, clientId.trim())
+          localStorage.setItem(QK.secret, clientSecret.trim())
+          localStorage.setItem(QK.env, environment)
+          const t = connector.tokensSnapshot()
+          if (t) saveTokens(t)
+        } catch { /* ignore */ }
+      } else {
+        connectorRef.current = null
+      }
+      setStatus(st)
+      if (st.state === 'error' && st.error) setError(st.error)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  function disconnect() {
+    connectorRef.current?.disconnect()
+    connectorRef.current = null
+    setStatus(null)
+    setResult(null)
+    try { localStorage.removeItem(QK.tokens) } catch { /* ignore */ }
+  }
+
+  async function runImport() {
+    const connector = connectorRef.current
+    if (!connector || !name.trim()) { if (!name.trim()) setError('Enter a company name.'); return }
+    setError(null)
+    setResult(null)
+    setBusy('Importing…')
+    try {
+      const summary = await connector.importRange(name.trim(), start, end)
+      setResult(summary)
+      reloadCompanies()
+      setCompany(summary.companyId)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const connected = status?.state === 'connected'
+
+  return (
+    <Section icon={<Link2 size={18} />} title="Connect to QuickBooks (live)" subtitle="Sign in to QuickBooks Online and import over the API.">
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <input className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" placeholder="QuickBooks Client ID" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+          <select className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" value={environment} onChange={(e) => setEnvironment(e.target.value as 'sandbox' | 'production')}>
+            <option value="sandbox">Sandbox (testing)</option>
+            <option value="production">Production</option>
+          </select>
+        </div>
+        <input type="password" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" placeholder="QuickBooks Client Secret" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
+        <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          In your Intuit app’s Redirect URIs, add this exactly: <span className="font-mono text-slate-700">{redirectUri}</span>
+        </div>
+        <button className="btn-outline" disabled={!!busy || !clientId.trim() || !clientSecret.trim()} onClick={connect}>
+          {busy === 'Connecting…' ? 'Connecting…' : connected ? 'Reconnect' : 'Connect to QuickBooks'}
+        </button>
+
+        {connected && (
+          <>
+            <input className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" placeholder="New company name (e.g. Sonic Systems AV Ltd.)" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-sm"><span className="mb-1 block text-xs font-medium text-slate-500">From</span>
+                <input type="date" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" value={start} onChange={(e) => setStart(e.target.value)} /></label>
+              <label className="text-sm"><span className="mb-1 block text-xs font-medium text-slate-500">To</span>
+                <input type="date" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn-primary" disabled={!!busy || !name.trim()} onClick={runImport}>{busy === 'Importing…' ? 'Importing…' : 'Import from QuickBooks'}</button>
+              <button className="btn-outline" disabled={!!busy} onClick={disconnect}>Disconnect</button>
+              {status?.realmId && <span className="text-xs text-slate-400">Company {status.realmId}</span>}
+            </div>
+          </>
+        )}
+
+        {error && <div className="rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</div>}
+        {result && (
+          <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <div className="font-semibold">Imported “{result.companyName}” ✓</div>
+            <ul className="mt-1 space-y-0.5 text-emerald-700">
+              <li>{result.transactions.toLocaleString()} transactions · {result.entries.toLocaleString()} entries</li>
+              <li>{result.accounts} accounts · {result.contacts} contacts ({result.customers} customers, {result.suppliers} suppliers)</li>
+              {result.roundingAdjustments > 0 && <li>{result.roundingAdjustments} rounding fix(es), net {formatMoney(result.roundingTotalCents)}</li>}
+            </ul>
+          </div>
+        )}
+        <p className="text-xs text-slate-400">
+          Pulls the General Ledger for the date range and rebuilds it as balanced double-entry (a new company).
+          Create your app at <span className="font-mono">developer.intuit.com</span>; start in Sandbox. Production
+          needs Intuit’s app review before other users can connect.
         </p>
       </div>
     </Section>

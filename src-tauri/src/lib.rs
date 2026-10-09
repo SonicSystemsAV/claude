@@ -1,5 +1,6 @@
 mod assistant;
 mod square;
+mod qbo;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,7 +11,10 @@ pub fn run() {
       assistant::assistant_chat,
       square::square_oauth,
       square::square_oauth_refresh,
-      square::square_api
+      square::square_api,
+      qbo::qbo_oauth,
+      qbo::qbo_oauth_refresh,
+      qbo::qbo_api
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
