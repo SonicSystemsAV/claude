@@ -673,6 +673,32 @@ function SquareConnectSection() {
   const connectorRef = useRef<ReturnType<typeof createSquareConnector> | null>(null)
   const redirectUri = `http://localhost:${redirectPort}/callback`
 
+  // Per-device persistence so a connection survives app restarts. The OAuth
+  // secret + refresh token live in localStorage on this machine only (a
+  // single-user local-first tradeoff; an OS secure store would be stricter).
+  const SQ = { app: 'sonic.square.appId', secret: 'sonic.square.secret', env: 'sonic.square.env', tokens: 'sonic.square.tokens' }
+  const saveTokens = (t: unknown) => { try { localStorage.setItem(SQ.tokens, JSON.stringify(t)) } catch { /* ignore */ } }
+
+  useEffect(() => {
+    try {
+      const sa = localStorage.getItem(SQ.app) ?? ''
+      const ss = localStorage.getItem(SQ.secret) ?? ''
+      const se = (localStorage.getItem(SQ.env) as 'sandbox' | 'production') || 'sandbox'
+      if (sa) setAppId(sa)
+      if (ss) setClientSecret(ss)
+      setEnvironment(se)
+      const st = localStorage.getItem(SQ.tokens)
+      if (st && sa && isTauri()) {
+        const connector = createSquareConnector({ applicationId: sa, clientSecret: ss, environment: se, redirectPort })
+        connector.onTokensChanged(saveTokens)
+        connector.setTokens(JSON.parse(st))
+        connectorRef.current = connector
+        setStatus(connector.status())
+      }
+    } catch { /* storage blocked — start fresh */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const bankAccounts =
     currentCompanyId != null ? getAccounts(currentCompanyId).filter((a) => a.is_bank === 1) : []
 
@@ -707,8 +733,20 @@ function SquareConnectSection() {
         environment,
         redirectPort,
       })
+      connector.onTokensChanged(saveTokens)
       const st = await connector.connect()
-      connectorRef.current = st.state === 'connected' ? connector : null
+      if (st.state === 'connected') {
+        connectorRef.current = connector
+        try {
+          localStorage.setItem(SQ.app, appId.trim())
+          localStorage.setItem(SQ.secret, clientSecret.trim())
+          localStorage.setItem(SQ.env, environment)
+          const t = connector.tokensSnapshot()
+          if (t) saveTokens(t)
+        } catch { /* ignore */ }
+      } else {
+        connectorRef.current = null
+      }
       setStatus(st)
       if (st.state === 'error' && st.error) setError(st.error)
     } catch (e) {
@@ -716,6 +754,14 @@ function SquareConnectSection() {
     } finally {
       setBusy(null)
     }
+  }
+
+  async function disconnect() {
+    await connectorRef.current?.disconnect()
+    connectorRef.current = null
+    setStatus(null)
+    setResult(null)
+    try { localStorage.removeItem(SQ.tokens) } catch { /* ignore */ }
   }
 
   async function sync() {
@@ -805,9 +851,13 @@ function SquareConnectSection() {
                 <input type="date" className="w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm" value={end} onChange={(e) => setEnd(e.target.value)} />
               </label>
             </div>
-            <button className="btn-primary" disabled={!!busy || bankAccountId === ''} onClick={sync}>
-              {busy === 'Syncing…' ? 'Syncing…' : 'Sync Square sales'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn-primary" disabled={!!busy || bankAccountId === ''} onClick={sync}>
+                {busy === 'Syncing…' ? 'Syncing…' : 'Sync Square sales'}
+              </button>
+              <button className="btn-outline" disabled={!!busy} onClick={disconnect}>Disconnect</button>
+              {status?.accountLabel && <span className="text-xs text-slate-400">Connected: {status.accountLabel}</span>}
+            </div>
           </>
         )}
 
@@ -817,6 +867,8 @@ function SquareConnectSection() {
             <div className="font-semibold">Synced from Square ✓</div>
             <ul className="mt-1 space-y-0.5 text-emerald-700">
               <li>{result.payments.toLocaleString()} sales · {formatMoney(result.grossCents)} gross · {formatMoney(result.feeCents)} fees · {formatMoney(result.taxCents)} tax</li>
+              {result.tipCents > 0 && <li>{formatMoney(result.tipCents)} tips (booked to Tips Collected)</li>}
+              {result.refunds > 0 && <li>{result.refunds.toLocaleString()} refunds · {formatMoney(result.refundTotalCents)} reversed</li>}
               <li>{result.payouts.toLocaleString()} payouts · {formatMoney(result.payoutTotalCents)} to bank ({result.payoutsMatched} auto-matched)</li>
               {result.itemsSynced > 0 && <li>{result.itemsSynced} new catalog item(s)</li>}
               {result.roundingAdjustments > 0 && <li>{result.roundingAdjustments} rounding fix(es), net {formatMoney(result.roundingTotalCents)}</li>}

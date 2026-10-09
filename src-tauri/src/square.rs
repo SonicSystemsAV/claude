@@ -145,6 +145,38 @@ pub fn square_oauth(
     Ok(body)
 }
 
+/// Exchange a stored refresh token for a fresh access token.
+#[tauri::command]
+pub fn square_oauth_refresh(
+    client_id: String,
+    client_secret: String,
+    environment: String,
+    refresh_token: String,
+) -> Result<Value, String> {
+    if client_id.trim().is_empty() || client_secret.trim().is_empty() || refresh_token.trim().is_empty() {
+        return Err("Missing Square credentials or refresh token.".into());
+    }
+    let base = api_base(&environment);
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!("{base}/oauth2/token"))
+        .header("Square-Version", SQUARE_VERSION)
+        .json(&json!({
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }))
+        .send()
+        .map_err(|e| format!("token refresh failed: {e}"))?;
+    let status = resp.status();
+    let body: Value = resp.json().map_err(|e| format!("invalid token JSON: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Square token refresh error {}: {}", status.as_u16(), body));
+    }
+    Ok(body)
+}
+
 /// Make an authenticated Square API call and return the parsed JSON.
 /// `method` is "GET" or "POST"; `path` is like "/v2/payments?begin_time=...".
 #[tauri::command]

@@ -9,6 +9,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       assistant::assistant_chat,
       square::square_oauth,
+      square::square_oauth_refresh,
       square::square_api
     ])
     .setup(|app| {

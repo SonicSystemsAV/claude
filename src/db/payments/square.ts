@@ -21,6 +21,7 @@ import type {
   DateRange,
   NormalizedPayment,
   NormalizedPayout,
+  NormalizedRefund,
   NormalizedLineItem,
 } from './connector'
 
@@ -38,15 +39,26 @@ export interface SquareMoney {
 export interface SquarePayment {
   id: string
   created_at: string // RFC3339
-  amount_money: SquareMoney // total charged incl. tax
+  amount_money: SquareMoney // sale incl. tax, excl. tip
+  tip_money?: SquareMoney
   /** Square may return several fee rows (e.g. card + app fee). */
   processing_fee?: { amount_money: SquareMoney }[]
-  total_money?: SquareMoney
+  total_money?: SquareMoney // amount + tip
   source_type?: string // 'CARD' | 'CASH' | 'EXTERNAL' | ...
   order_id?: string
   customer_id?: string
   buyer_email_address?: string
   payout_id?: string
+}
+
+export interface SquareRefund {
+  id: string
+  created_at: string
+  amount_money: SquareMoney
+  processing_fee?: { amount_money: SquareMoney }[]
+  payment_id?: string
+  order_id?: string
+  status?: string // 'PENDING' | 'COMPLETED' | 'REJECTED' | 'FAILED'
 }
 
 export interface SquareOrderLineItem {
@@ -109,9 +121,9 @@ export function mapOrderLineItems(order: SquareOrder | undefined): NormalizedLin
  * Tax comes from the order's total_tax_money; fee from processing_fee.
  */
 export function mapPayment(p: SquarePayment, order?: SquareOrder): NormalizedPayment {
-  // amount_money is the sale incl. tax but excl. tip; total_money adds tips.
-  // We book the sale (amount_money); TODO(sandbox): handle tips + refunds.
+  // amount_money is the sale incl. tax, excl. tip; tip_money is the tip.
   const gross = p.amount_money.amount
+  const tip = p.tip_money?.amount ?? 0
   const fee = sumFees(p)
   const tax = order?.total_tax_money?.amount ?? 0
   return {
@@ -119,12 +131,28 @@ export function mapPayment(p: SquarePayment, order?: SquareOrder): NormalizedPay
     date: squareDateToISO(p.created_at),
     gross,
     fee,
-    net: gross - fee,
+    tip,
+    net: gross + tip - fee, // what actually settles into the payout
     tax,
     method: squareTender(p.source_type),
     customerName: p.buyer_email_address ?? null,
     items: mapOrderLineItems(order),
     payoutId: p.payout_id ?? null,
+  }
+}
+
+/** Map a Square refund; `taxRatio` prorates tax from the original sale (0 if unknown). */
+export function mapRefund(r: SquareRefund, taxRatio = 0): NormalizedRefund {
+  const gross = r.amount_money.amount
+  const fee = (r.processing_fee ?? []).reduce((s, f) => s + (f.amount_money?.amount ?? 0), 0)
+  return {
+    externalId: r.id,
+    date: squareDateToISO(r.created_at),
+    gross,
+    fee,
+    tax: Math.round(gross * taxRatio),
+    method: 'Square refund',
+    payoutId: null,
   }
 }
 
@@ -183,6 +211,7 @@ export class SquareConnector implements PaymentConnector {
   readonly provider = 'square'
   private state: ConnectorStatus
   private tokens: SquareTokens | null = null
+  private onTokens?: (t: SquareTokens) => void
 
   constructor(private config: SquareConfig) {
     this.state = { provider: 'square', state: 'disconnected', accountLabel: null, error: null }
@@ -190,6 +219,22 @@ export class SquareConnector implements PaymentConnector {
 
   status(): ConnectorStatus {
     return this.state
+  }
+
+  /** Register a callback fired whenever tokens change (connect/refresh) — for persistence. */
+  onTokensChanged(cb: (t: SquareTokens) => void): void {
+    this.onTokens = cb
+  }
+
+  /** Current tokens, for the caller to persist. */
+  tokensSnapshot(): SquareTokens | null {
+    return this.tokens
+  }
+
+  private setTokensInternal(tokens: SquareTokens): void {
+    this.tokens = tokens
+    this.state = { provider: 'square', state: 'connected', accountLabel: tokens.merchantId ?? 'Square', error: null }
+    this.onTokens?.(tokens)
   }
 
   /** Preload tokens obtained earlier (e.g. restored from a prior connect). */
@@ -228,13 +273,12 @@ export class SquareConnector implements PaymentConnector {
           scopes: SQUARE_SCOPES,
         },
       )
-      this.tokens = {
+      this.setTokensInternal({
         accessToken: res.access_token,
         refreshToken: res.refresh_token,
         merchantId: res.merchant_id,
         expiresAt: res.expires_at,
-      }
-      this.state = { provider: 'square', state: 'connected', accountLabel: res.merchant_id ?? 'Square', error: null }
+      })
     } catch (e) {
       this.state = { provider: 'square', state: 'error', error: e instanceof Error ? e.message : String(e) }
     }
@@ -247,8 +291,38 @@ export class SquareConnector implements PaymentConnector {
     this.state = { provider: 'square', state: 'disconnected', accountLabel: null, error: null }
   }
 
+  /** Exchange the stored refresh token for a fresh access token (via Tauri). */
+  async refreshTokens(): Promise<void> {
+    if (!this.tokens?.refreshToken) throw new Error('No Square refresh token to refresh with.')
+    const { invoke } = await import('@tauri-apps/api/core')
+    const res = await invoke<{ access_token: string; refresh_token?: string; merchant_id?: string; expires_at?: string }>(
+      'square_oauth_refresh',
+      {
+        clientId: this.config.applicationId.trim(),
+        clientSecret: this.config.clientSecret.trim(),
+        environment: this.config.environment,
+        refreshToken: this.tokens.refreshToken,
+      },
+    )
+    this.setTokensInternal({
+      accessToken: res.access_token,
+      refreshToken: res.refresh_token ?? this.tokens.refreshToken,
+      merchantId: res.merchant_id ?? this.tokens.merchantId,
+      expiresAt: res.expires_at,
+    })
+  }
+
+  /** Refresh the access token if it expires within ~2 minutes and we can. */
+  private async ensureFreshToken(): Promise<void> {
+    const exp = this.tokens?.expiresAt ? Date.parse(this.tokens.expiresAt) : NaN
+    if (!Number.isNaN(exp) && exp - Date.now() < 120_000 && this.tokens?.refreshToken && this.config.clientSecret.trim()) {
+      await this.refreshTokens()
+    }
+  }
+
   private async api<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     if (!this.tokens) throw new Error('Not connected to Square. Run Connect first.')
+    await this.ensureFreshToken()
     const { invoke } = await import('@tauri-apps/api/core')
     return invoke<T>('square_api', {
       environment: this.config.environment,
@@ -302,6 +376,61 @@ export class SquareConnector implements PaymentConnector {
       cursor = page.cursor
     } while (cursor)
     return payouts.filter((p) => (p.status ?? '').toUpperCase() !== 'FAILED').map(mapPayout)
+  }
+
+  /**
+   * Pull refunds in the range. Tax is prorated from the original sale's order
+   * (tax ÷ total) so partial refunds reverse the right amount of tax; when the
+   * order can't be resolved, tax falls back to 0.
+   */
+  async listRefunds(range: DateRange): Promise<NormalizedRefund[]> {
+    this.assertReady()
+    const { begin, end } = rangeToRfc3339(range)
+    const refunds: SquareRefund[] = []
+    let cursor: string | undefined
+    do {
+      const q = `/v2/refunds?begin_time=${begin}&end_time=${end}&sort_order=ASC&limit=100${this.locationParam()}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      const page = await this.api<{ refunds?: SquareRefund[]; cursor?: string }>('GET', q)
+      refunds.push(...(page.refunds ?? []))
+      cursor = page.cursor
+    } while (cursor)
+
+    const completed = refunds.filter((r) => {
+      const s = (r.status ?? '').toUpperCase()
+      return s !== 'REJECTED' && s !== 'FAILED'
+    })
+
+    // Resolve a tax ratio per refund via payment → order (cached, few refunds).
+    const ratioCache = new Map<string, number>() // order_id → tax ratio
+    const orderIdForRefund = async (r: SquareRefund): Promise<string | undefined> => {
+      if (r.order_id) return r.order_id
+      if (!r.payment_id) return undefined
+      try {
+        const res = await this.api<{ payment?: SquarePayment }>('GET', `/v2/payments/${encodeURIComponent(r.payment_id)}`)
+        return res.payment?.order_id
+      } catch { return undefined }
+    }
+    const taxRatioForOrder = async (orderId: string): Promise<number> => {
+      const cached = ratioCache.get(orderId)
+      if (cached != null) return cached
+      let ratio = 0
+      try {
+        const res = await this.api<{ order?: SquareOrder }>('GET', `/v2/orders/${encodeURIComponent(orderId)}`)
+        const total = res.order?.total_money?.amount ?? 0
+        const tax = res.order?.total_tax_money?.amount ?? 0
+        ratio = total > 0 ? tax / total : 0
+      } catch { ratio = 0 }
+      ratioCache.set(orderId, ratio)
+      return ratio
+    }
+
+    const out: NormalizedRefund[] = []
+    for (const r of completed) {
+      const orderId = await orderIdForRefund(r)
+      const ratio = orderId ? await taxRatioForOrder(orderId) : 0
+      out.push(mapRefund(r, ratio))
+    }
+    return out
   }
 
   private assertReady(): void {

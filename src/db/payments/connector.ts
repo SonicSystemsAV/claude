@@ -58,10 +58,12 @@ export interface NormalizedPayment {
   gross: number
   /** Processor fee withheld, in cents (positive). */
   fee: number
-  /** Amount that actually settles into a payout, in cents (gross − fee). */
+  /** Amount that actually settles into a payout, in cents (gross + tip − fee). */
   net: number
   /** Tax portion of `gross`, in cents. */
   tax: number
+  /** Tip collected on top of the sale, in cents (booked to a Tips liability). */
+  tip?: number
   /** Tender: 'card' | 'cash' | 'gift_card' | 'other' (free-form, provider-labelled). */
   method: string
   /** Buyer name if the POS captured one. */
@@ -86,6 +88,24 @@ export interface NormalizedPayout {
   paymentIds?: string[]
   /** Free-form description for the bank-feed row. */
   description?: string
+}
+
+/**
+ * A refund to a customer — the reversal of (part of) a sale. Booked as the
+ * opposite of a sale: reduces income + tax and the clearing balance.
+ */
+export interface NormalizedRefund {
+  externalId: string
+  /** ISO yyyy-mm-dd the refund was issued. */
+  date: string
+  /** Amount refunded to the customer incl. tax, in cents (positive). */
+  gross: number
+  /** Processing fee returned by the processor, in cents (usually 0 — fees are kept). */
+  fee: number
+  /** Tax portion of the refund, in cents. */
+  tax: number
+  method: string
+  payoutId?: string | null
 }
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -121,6 +141,9 @@ export interface PaymentConnector {
 
   /** Pull payouts (bank deposits) in the range. */
   listPayouts(range: DateRange): Promise<NormalizedPayout[]>
+
+  /** Pull customer refunds in the range, if the provider supports it. */
+  listRefunds?(range: DateRange): Promise<NormalizedRefund[]>
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +158,8 @@ export const DEFAULT_PAYMENT_ACCOUNTS = {
   fees: 'Merchant Processing Fees',
   /** Fallback sales income when a line item has no mapped income account. */
   income: 'Sales Income',
+  /** Tips collected on behalf of staff (liability), kept out of income. */
+  tips: 'Tips Collected',
   /** Penny-drift safety net, mirrors QBO Import Rounding. */
   rounding: 'POS Import Rounding',
 } as const
@@ -148,6 +173,8 @@ export interface ImportPaymentConfig {
   feesAccountName?: string
   /** Override the default income-account name. */
   incomeAccountName?: string
+  /** Override the tips-liability account name. */
+  tipsAccountName?: string
   /** Tax liability account; defaults to the company's via ensureTaxAccountId. */
   taxAccountId?: number
   /** Create catalog Items for each distinct line-item name (default true). */
@@ -168,7 +195,10 @@ export interface ImportPaymentSummary {
   grossCents: number
   feeCents: number
   taxCents: number
+  tipCents: number
   netCents: number
+  refunds: number
+  refundTotalCents: number
   payoutTotalCents: number
   bankRowsInserted: number
   payoutsMatched: number
@@ -187,23 +217,42 @@ export interface PostingAccounts {
   fees: number
   income: number
   tax: number
+  tips: number
   bank: number
 }
 
 /**
  * Balanced GL lines for one sale:
- *   DR Clearing (net) + DR Fees (fee) = CR Income (subtotal) + CR Tax (tax)
- * Any penny drift is returned in `imbalance` for the caller's rounding net.
+ *   DR Clearing (net) + DR Fees (fee) = CR Income (subtotal) + CR Tax + CR Tips
+ * where net = gross + tip − fee. Any penny drift is returned in `imbalance`.
  */
 export function buildSaleLines(p: NormalizedPayment, acct: PostingAccounts): { lines: TxnLine[]; imbalance: number } {
+  const tip = p.tip ?? 0
   const subtotal = p.gross - p.tax
   const lines: TxnLine[] = []
   // Debits: the money owed to us lands in clearing (net) and the fee is an expense.
   if (p.net !== 0) lines.push({ account_id: acct.clearing, amount_cents: p.net, memo: p.method })
   if (p.fee !== 0) lines.push({ account_id: acct.fees, amount_cents: p.fee, memo: 'Processing fee' })
-  // Credits: income (ex-tax) and tax collected.
+  // Credits: income (ex-tax), tax collected, and any tip (a liability owed out).
   if (subtotal !== 0) lines.push({ account_id: acct.income, amount_cents: -subtotal, memo: p.customerName ?? null })
   if (p.tax !== 0) lines.push({ account_id: acct.tax, amount_cents: -p.tax, memo: 'Sales tax collected' })
+  if (tip !== 0) lines.push({ account_id: acct.tips, amount_cents: -tip, memo: 'Tip collected' })
+  const imbalance = lines.reduce((s, l) => s + l.amount_cents, 0)
+  return { lines, imbalance }
+}
+
+/**
+ * Balanced GL lines for one refund (the reversal of a sale):
+ *   CR Clearing (gross − fee) + CR Fees (fee returned) = DR Income (subtotal) + DR Tax (tax)
+ */
+export function buildRefundLines(r: NormalizedRefund, acct: PostingAccounts): { lines: TxnLine[]; imbalance: number } {
+  const subtotal = r.gross - r.tax
+  const net = r.gross - r.fee
+  const lines: TxnLine[] = []
+  if (net !== 0) lines.push({ account_id: acct.clearing, amount_cents: -net, memo: `${r.method} refund` })
+  if (r.fee !== 0) lines.push({ account_id: acct.fees, amount_cents: -r.fee, memo: 'Processing fee returned' })
+  if (subtotal !== 0) lines.push({ account_id: acct.income, amount_cents: subtotal, memo: 'Refund' })
+  if (r.tax !== 0) lines.push({ account_id: acct.tax, amount_cents: r.tax, memo: 'Sales tax refunded' })
   const imbalance = lines.reduce((s, l) => s + l.amount_cents, 0)
   return { lines, imbalance }
 }
@@ -238,18 +287,22 @@ export function importPaymentData(opts: {
   provider: string
   payments: NormalizedPayment[]
   payouts: NormalizedPayout[]
+  refunds?: NormalizedRefund[]
   config: ImportPaymentConfig
 }): ImportPaymentSummary {
   const { companyId, provider, payments, payouts, config } = opts
+  const refunds = opts.refunds ?? []
   const skipZero = config.skipZero ?? true
   const syncItems = config.syncItems ?? true
   const autoMatch = config.autoMatchPayouts ?? true
 
+  const anyTips = payments.some((p) => (p.tip ?? 0) !== 0)
   const acct: PostingAccounts = {
     clearing: ensureAccountByName(companyId, config.clearingAccountName ?? DEFAULT_PAYMENT_ACCOUNTS.clearing, 'asset'),
     fees: ensureAccountByName(companyId, config.feesAccountName ?? DEFAULT_PAYMENT_ACCOUNTS.fees, 'expense'),
     income: ensureAccountByName(companyId, config.incomeAccountName ?? DEFAULT_PAYMENT_ACCOUNTS.income, 'income'),
     tax: config.taxAccountId ?? ensureTaxAccountId(companyId),
+    tips: anyTips ? ensureAccountByName(companyId, config.tipsAccountName ?? DEFAULT_PAYMENT_ACCOUNTS.tips, 'liability') : 0,
     bank: config.bankAccountId,
   }
   let roundingId: number | null = null
@@ -257,7 +310,8 @@ export function importPaymentData(opts: {
 
   const summary: ImportPaymentSummary = {
     provider, companyId, payments: 0, payouts: 0, itemsSynced: 0,
-    grossCents: 0, feeCents: 0, taxCents: 0, netCents: 0, payoutTotalCents: 0,
+    grossCents: 0, feeCents: 0, taxCents: 0, tipCents: 0, netCents: 0,
+    refunds: 0, refundTotalCents: 0, payoutTotalCents: 0,
     bankRowsInserted: 0, payoutsMatched: 0, skippedZero: 0,
     roundingAdjustments: 0, roundingTotalCents: 0,
   }
@@ -307,11 +361,34 @@ export function importPaymentData(opts: {
     summary.grossCents += pmt.gross
     summary.feeCents += pmt.fee
     summary.taxCents += pmt.tax
+    summary.tipCents += pmt.tip ?? 0
     summary.netCents += pmt.net
     // TODO(desktop): also create a sales_receipt *document* with item lines and
     // payment_method once the documents engine supports explicit tax + a split
     // deposit (fee withheld). Today createSalesReceipt computes tax from a rate
     // and deposits the full total, so posting GL directly keeps amounts exact.
+  }
+
+  // 2b) Post each refund as a reversing entry against clearing.
+  for (const rf of refunds) {
+    if (rf.gross === 0) continue
+    const { lines, imbalance } = buildRefundLines(rf, acct)
+    if (lines.length < 2) continue
+    if (imbalance !== 0) {
+      lines.push({ account_id: ensureRounding(), amount_cents: -imbalance, memo: 'Rounding' })
+      summary.roundingAdjustments++
+      summary.roundingTotalCents += imbalance
+    }
+    postTransaction({
+      company_id: companyId,
+      date: rf.date,
+      memo: `${provider} refund`,
+      reference: rf.externalId,
+      source: 'refund',
+      lines,
+    })
+    summary.refunds++
+    summary.refundTotalCents += rf.gross
   }
 
   // 3) Post each payout (DR Bank / CR Clearing) + a bank-feed row for reconciliation.
@@ -343,7 +420,7 @@ export function importPaymentData(opts: {
   }
 
   audit(companyId, 'import', 'import', companyId,
-    `Imported ${summary.payments} ${provider} payments and ${summary.payouts} payouts`)
+    `Imported ${summary.payments} ${provider} payments, ${summary.refunds} refunds and ${summary.payouts} payouts`)
   return summary
 }
 
@@ -354,11 +431,12 @@ export async function importFromConnector(
   range: DateRange,
   config: ImportPaymentConfig,
 ): Promise<ImportPaymentSummary> {
-  const [payments, payouts] = await Promise.all([
+  const [payments, payouts, refunds] = await Promise.all([
     connector.listPayments(range),
     connector.listPayouts(range),
+    connector.listRefunds ? connector.listRefunds(range) : Promise.resolve([]),
   ])
-  return importPaymentData({ companyId, provider: connector.provider, payments, payouts, config })
+  return importPaymentData({ companyId, provider: connector.provider, payments, payouts, refunds, config })
 }
 
 // Local helper (not exported from repo) — look up a just-inserted bank row id by fitid.
