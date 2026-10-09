@@ -1,10 +1,11 @@
+import { useState } from 'react'
 import { clsx } from 'clsx'
 import { Ban, Pencil, Printer } from 'lucide-react'
 import { listDocuments, voidDocument, type DocumentWithContact } from '../db/documents'
 import { printDocument } from '../db/documentPrint'
 import type { DocType } from '../db/types'
 import { Money } from './Money'
-import { formatDate } from '../lib/format'
+import { formatDate, todayISO } from '../lib/format'
 import { useCan } from '../state/store'
 
 function isEditable(d: DocumentWithContact): boolean {
@@ -34,11 +35,25 @@ export function DocumentList({
   onEdit?: (docId: number) => void
   showBalance?: boolean
 }) {
-  const docs: DocumentWithContact[] = listDocuments(companyId, type)
+  const all: DocumentWithContact[] = listDocuments(companyId, type)
   const canEdit = useCan('edit')
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const docs = all.filter((d) => (!start || d.date >= start) && (!end || d.date <= end))
 
   return (
-    <div className="card overflow-hidden">
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+        <span className="text-xs font-medium text-slate-500">From</span>
+        <input type="date" className="rounded-md border border-slate-300 px-2 py-1" value={start} onChange={(e) => setStart(e.target.value)} />
+        <span className="text-xs font-medium text-slate-500">To</span>
+        <input type="date" className="rounded-md border border-slate-300 px-2 py-1" value={end} onChange={(e) => setEnd(e.target.value)} />
+        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { setStart(`${new Date().getFullYear()}-01-01`); setEnd(todayISO()) }}>This year</button>
+        <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { const d = new Date(); setStart(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`); setEnd(todayISO()) }}>This month</button>
+        {(start || end) && <button className="btn-ghost px-2 py-1 text-xs" onClick={() => { setStart(''); setEnd('') }}>Clear</button>}
+        {(start || end) && <span className="text-xs text-slate-400">{docs.length} of {all.length}</span>}
+      </div>
+      <div className="card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
@@ -105,6 +120,7 @@ export function DocumentList({
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
