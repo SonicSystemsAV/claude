@@ -3,6 +3,7 @@ import { Download } from 'lucide-react'
 import { useStore } from '../state/store'
 import { getAuditLog } from '../db/repo'
 import { downloadCSV } from '../lib/csv'
+import { formatDate } from '../lib/format'
 
 const ACTION_BADGE: Record<string, string> = {
   create: 'bg-emerald-50 text-emerald-700',
@@ -14,10 +15,14 @@ const ACTION_BADGE: Record<string, string> = {
 }
 
 function fmtTs(ts: string): string {
-  // stored as 'YYYY-MM-DD HH:MM:SS' (UTC from SQLite datetime('now'))
+  // stored as 'YYYY-MM-DD HH:MM:SS' (UTC from SQLite datetime('now')).
+  // Show the date in the app-wide format + local time, for consistency.
   try {
     const d = new Date(ts.replace(' ', 'T') + 'Z')
-    return d.toLocaleString('en-CA')
+    const localISO = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    return `${formatDate(localISO)} ${hh}:${mm}`
   } catch {
     return ts
   }

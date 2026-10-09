@@ -185,7 +185,7 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
     ...(isCustomer ? openDocuments(companyId, 'invoice', id) : []),
     ...(isSupplier ? openDocuments(companyId, 'bill', id) : []),
   ]
-  const txns = getTransactions(companyId, { limit: 500, contactId: id })
+  const txns = getTransactions(companyId, { contactId: id })
 
   function toggle(txnId: number) {
     setSelected((prev) => {
