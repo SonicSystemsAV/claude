@@ -29,6 +29,8 @@ export const DEFAULT_ASSISTANT_MODEL = 'claude-opus-5-5'
 export interface AssistantConfig {
   /** The user's Anthropic API key (runtime only; store per-device, never in the book file). */
   apiKey: string
+  /** Optional Anthropic workspace id — required for org-scoped keys, ignored for workspace-scoped keys. */
+  workspaceId?: string
   /** Model id; defaults to DEFAULT_ASSISTANT_MODEL. */
   model?: string
   /** Max transactions to include in the context (keeps token use bounded). */
@@ -59,7 +61,7 @@ export interface AnthropicResponse {
 
 /** Pluggable transport so desktop (Tauri Rust) and dev (fetch) differ only here. */
 export interface AssistantTransport {
-  send(req: AnthropicRequest, apiKey: string): Promise<AnthropicResponse>
+  send(req: AnthropicRequest, apiKey: string, workspaceId?: string): Promise<AnthropicResponse>
 }
 
 // ---- Ledger context --------------------------------------------------------
@@ -141,12 +143,12 @@ export function buildAssistantRequest(opts: {
  * (camelCased from `api_key`) and returns the parsed Messages API response.
  */
 export const tauriTransport: AssistantTransport = {
-  async send(req: AnthropicRequest, apiKey: string): Promise<AnthropicResponse> {
+  async send(req: AnthropicRequest, apiKey: string, workspaceId?: string): Promise<AnthropicResponse> {
     const { invoke } = await import('@tauri-apps/api/core')
     const data = await invoke<{
       content?: { type: string; text?: string }[]
       stop_reason?: string | null
-    }>('assistant_chat', { req, apiKey })
+    }>('assistant_chat', { req, apiKey, workspaceId: workspaceId || null })
     const text = (data.content ?? [])
       .filter((b) => b.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text as string)
@@ -162,14 +164,16 @@ export const tauriTransport: AssistantTransport = {
  * ship this path; the desktop build uses tauriTransport.
  */
 export const browserFetchTransport: AssistantTransport = {
-  async send(req: AnthropicRequest, apiKey: string): Promise<AnthropicResponse> {
+  async send(req: AnthropicRequest, apiKey: string, workspaceId?: string): Promise<AnthropicResponse> {
+    const headers: Record<string, string> = {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    }
+    if (workspaceId && workspaceId.trim()) headers['anthropic-workspace-id'] = workspaceId.trim()
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(req),
     })
     if (!resp.ok) {
@@ -208,5 +212,5 @@ export async function askAssistant(opts: {
   if (!opts.question.trim()) throw new Error('Ask a question first.')
   const req = buildAssistantRequest(opts)
   const transport = opts.transport ?? getAssistantTransport()
-  return transport.send(req, opts.config.apiKey)
+  return transport.send(req, opts.config.apiKey, opts.config.workspaceId)
 }

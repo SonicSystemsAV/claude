@@ -550,10 +550,12 @@ function PeriodLockSection() {
 
 const ASSISTANT_KEY_LS = 'sonic.assistant.apiKey'
 const ASSISTANT_MODEL_LS = 'sonic.assistant.model'
+const ASSISTANT_WS_LS = 'sonic.assistant.workspaceId'
 
 function AssistantSection() {
   const currentCompanyId = useStore((s) => s.currentCompanyId)
   const [apiKey, setApiKey] = useState('')
+  const [workspaceId, setWorkspaceId] = useState('')
   const [model, setModel] = useState(DEFAULT_ASSISTANT_MODEL)
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState<string | null>(null)
@@ -564,13 +566,15 @@ function AssistantSection() {
     try {
       setApiKey(localStorage.getItem(ASSISTANT_KEY_LS) ?? '')
       setModel(localStorage.getItem(ASSISTANT_MODEL_LS) ?? DEFAULT_ASSISTANT_MODEL)
+      setWorkspaceId(localStorage.getItem(ASSISTANT_WS_LS) ?? '')
     } catch { /* storage blocked — leave defaults */ }
   }, [])
 
-  function persist(key: string, mdl: string) {
+  function persist(patch: { key?: string; mdl?: string; ws?: string }) {
     try {
-      localStorage.setItem(ASSISTANT_KEY_LS, key)
-      localStorage.setItem(ASSISTANT_MODEL_LS, mdl)
+      if (patch.key !== undefined) localStorage.setItem(ASSISTANT_KEY_LS, patch.key)
+      if (patch.mdl !== undefined) localStorage.setItem(ASSISTANT_MODEL_LS, patch.mdl)
+      if (patch.ws !== undefined) localStorage.setItem(ASSISTANT_WS_LS, patch.ws)
     } catch { /* ignore */ }
   }
 
@@ -583,7 +587,7 @@ function AssistantSection() {
       const res = await askAssistant({
         companyId: currentCompanyId,
         question: question.trim(),
-        config: { apiKey: apiKey.trim(), model },
+        config: { apiKey: apiKey.trim(), workspaceId: workspaceId.trim() || undefined, model },
       })
       setAnswer(res.text || '(no text returned)')
     } catch (e) {
@@ -606,18 +610,24 @@ function AssistantSection() {
             className="col-span-2 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
             placeholder="Anthropic API key (sk-ant-…)"
             value={apiKey}
-            onChange={(e) => { setApiKey(e.target.value); persist(e.target.value, model) }}
+            onChange={(e) => { setApiKey(e.target.value); persist({ key: e.target.value }) }}
           />
           <select
             className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
             value={model}
-            onChange={(e) => { setModel(e.target.value); persist(apiKey, e.target.value) }}
+            onChange={(e) => { setModel(e.target.value); persist({ mdl: e.target.value }) }}
             title="Model"
           >
             <option value="claude-opus-5-5">Opus (best)</option>
             <option value="claude-sonnet-5-5">Sonnet (cheaper)</option>
             <option value="claude-haiku-5-5">Haiku (cheapest)</option>
           </select>
+          <input
+            className="col-span-3 w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            placeholder="Workspace ID (only for org-scoped keys — leave blank if your key is workspace-scoped)"
+            value={workspaceId}
+            onChange={(e) => { setWorkspaceId(e.target.value); persist({ ws: e.target.value }) }}
+          />
         </div>
         <textarea
           className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"

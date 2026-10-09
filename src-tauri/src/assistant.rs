@@ -8,16 +8,25 @@ use serde_json::Value;
 /// HTTPS call and returns the parsed JSON response. Arg `api_key` is received as
 /// `apiKey` from JS (Tauri camelCases command args).
 #[tauri::command]
-pub async fn assistant_chat(req: Value, api_key: String) -> Result<Value, String> {
+pub async fn assistant_chat(
+    req: Value,
+    api_key: String,
+    workspace_id: Option<String>,
+) -> Result<Value, String> {
     if api_key.trim().is_empty() {
         return Err("Missing Anthropic API key.".into());
     }
     let client = reqwest::Client::new();
-    let resp = client
+    let mut builder = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    // Org-scoped keys require naming the workspace; workspace-scoped keys don't.
+    if let Some(ws) = workspace_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.header("anthropic-workspace-id", ws);
+    }
+    let resp = builder
         .json(&req)
         .send()
         .await
