@@ -15,6 +15,25 @@ CREATE TABLE IF NOT EXISTS companies (
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Per-company branding for printed invoices / statements (letterhead).
+CREATE TABLE IF NOT EXISTS company_profiles (
+  company_id     INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  display_name   TEXT,
+  address_line1  TEXT,
+  address_line2  TEXT,
+  city           TEXT,
+  province       TEXT,
+  postal         TEXT,
+  country        TEXT,
+  phone          TEXT,
+  email          TEXT,
+  website        TEXT,
+  tax_number     TEXT,
+  logo_data_url  TEXT,
+  use_letterhead INTEGER NOT NULL DEFAULT 1,  -- 0 = pre-printed stationery (blank top band)
+  footer_note    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS accounts (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   company_id     INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,

@@ -49,6 +49,24 @@ export interface Company {
   created_at: string
 }
 
+export interface CompanyProfile {
+  company_id: number
+  display_name: string | null
+  address_line1: string | null
+  address_line2: string | null
+  city: string | null
+  province: string | null
+  postal: string | null
+  country: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  tax_number: string | null
+  logo_data_url: string | null
+  use_letterhead: number
+  footer_note: string | null
+}
+
 export interface Account {
   id: number
   company_id: number

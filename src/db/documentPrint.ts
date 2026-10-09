@@ -5,7 +5,7 @@
  */
 
 import { all, one } from './db'
-import { getCompany } from './repo'
+import { getCompany, getCompanyProfile } from './repo'
 import { getDocument } from './documents'
 import type { DocType, Contact } from './types'
 import {
@@ -15,7 +15,29 @@ import {
   type PrintDocumentData,
   type PrintLineItem,
   type StatementRow,
+  type CompanyHeader,
 } from '../lib/printHtml'
+
+/** Compose the letterhead for a company from its profile (defaults when unset). */
+function companyHeader(companyId: number): CompanyHeader {
+  const c = getCompany(companyId)
+  if (!c) throw new Error('Company not found.')
+  const p = getCompanyProfile(companyId)
+  const cityLine = [p?.city, p?.province, p?.postal].filter(Boolean).join(', ')
+  const addressLines = [p?.address_line1, p?.address_line2, cityLine, p?.country].filter(Boolean) as string[]
+  return {
+    name: p?.display_name || c.name,
+    legalName: c.legal_name,
+    addressLines,
+    phone: p?.phone ?? null,
+    email: p?.email ?? null,
+    website: p?.website ?? null,
+    taxNumber: p?.tax_number ?? null,
+    logoDataUrl: p?.logo_data_url ?? null,
+    useLetterhead: p ? p.use_letterhead === 1 : true,
+    footerNote: p?.footer_note ?? null,
+  }
+}
 
 const KIND_LABEL: Record<DocType, string> = {
   invoice: 'Invoice',
@@ -67,7 +89,7 @@ export function buildDocumentData(docId: number): PrintDocumentData {
   const isPurchase = doc.type === 'bill' || doc.type === 'expense'
   return {
     kind: KIND_LABEL[doc.type],
-    company: { name: company.name, legalName: company.legal_name },
+    company: companyHeader(doc.company_id),
     party: {
       label: isPurchase ? 'Vendor' : 'Bill to',
       name: doc.contact_name ?? '',
@@ -143,7 +165,7 @@ export function buildStatementData(companyId: number, contactId: number, mode: '
   }
 
   return {
-    company: { name: company.name, legalName: company.legal_name },
+    company: companyHeader(companyId),
     party: { name: contact?.name ?? '', addressLines: addressLines(contact), email: contact?.email ?? null },
     heading: 'Statement of Account',
     start,
@@ -158,4 +180,35 @@ export function buildStatementData(companyId: number, contactId: number, mode: '
 export function printStatement(companyId: number, contactId: number, mode: 'ar' | 'ap', start: string, end: string): void {
   const data = buildStatementData(companyId, contactId, mode, start, end)
   printHTML(statementHtml(data), `Statement — ${data.party.name}`)
+}
+
+/** Print a sample invoice using the current company letterhead — for the profile editor. */
+export function previewLetterhead(companyId: number): void {
+  const company = getCompany(companyId)
+  const data: PrintDocumentData = {
+    kind: 'Invoice',
+    company: companyHeader(companyId),
+    party: {
+      label: 'Bill to',
+      name: 'Sample Customer Inc.',
+      addressLines: ['123 Example Street', 'Toronto, ON, M5H 1A1', 'Canada'],
+      email: 'accounts@example.com',
+    },
+    number: 'INV-PREVIEW',
+    date: new Date().toISOString().slice(0, 10),
+    dueDate: null,
+    paymentMethod: null,
+    status: 'open',
+    currency: company?.base_currency ?? 'CAD',
+    lineItems: [
+      { description: 'Sample product or service', qty: 2, unitPriceCents: 5000, amountCents: 10000 },
+      { description: 'On-site labour', qty: 1, unitPriceCents: 7500, amountCents: 7500 },
+    ],
+    subtotalCents: 17500,
+    taxCents: 2275,
+    totalCents: 19775,
+    balanceCents: 19775,
+    memo: 'This is a preview — dummy data to show your letterhead.',
+  }
+  printHTML(invoiceHtml(data), 'Letterhead preview')
 }

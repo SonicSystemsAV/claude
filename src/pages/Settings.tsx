@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard, Bot, Link2 } from 'lucide-react'
+import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard, Bot, Link2, Building2, Image as ImageIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
 import { isTauri } from '../lib/desktop'
 import { exportBytes, importBytes, resetDatabase } from '../db/db'
 import { seedIfEmpty } from '../db/seed'
-import { createCompany, listCompanies, getCompany, setLockedThrough, getAccounts, deleteCompany } from '../db/repo'
+import { createCompany, listCompanies, getCompany, setLockedThrough, getAccounts, deleteCompany, getCompanyProfile, saveCompanyProfile, type CompanyProfileInput } from '../db/repo'
 import { getTaxCodes, createTaxCode, deleteTaxCode } from '../db/documents'
 import { formatDate } from '../lib/format'
 import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
@@ -13,6 +13,7 @@ import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
 import { askAssistant, DEFAULT_ASSISTANT_MODEL, ASSISTANT_LS_KEYS } from '../db/assistant'
 import { createQuickBooksConnector, QBO_DEFAULT_REDIRECT_PORT, type QboConnectStatus } from '../db/qboLive'
+import { previewLetterhead } from '../db/documentPrint'
 import { formatMoney } from '../lib/money'
 import { CURRENCIES, DEFAULT_CURRENCY } from '../db/currency'
 import { listUsers, createUser, setUserRole, setUserActive, setUserPassword, deleteUser, type Role, type User } from '../db/users'
@@ -145,6 +146,7 @@ export default function Settings() {
       </Section>
 
       {isAdmin && <ManageCompaniesSection />}
+      <CompanyProfileSection />
       <QBOImportSection />
       <QBOLiveSection />
       <SquareConnectSection />
@@ -882,6 +884,132 @@ function SquareConnectSection() {
           payouts as deposits in your bank register for reconciliation. Set up your Square app at{' '}
           <span className="font-mono">developer.squareup.com</span>; start in Sandbox.
         </p>
+      </div>
+    </Section>
+  )
+}
+
+interface ProfileForm {
+  display_name: string
+  address_line1: string
+  address_line2: string
+  city: string
+  province: string
+  postal: string
+  country: string
+  phone: string
+  email: string
+  website: string
+  tax_number: string
+  footer_note: string
+  use_letterhead: boolean
+  logo_data_url: string | null
+}
+
+const EMPTY_PROFILE: ProfileForm = {
+  display_name: '', address_line1: '', address_line2: '', city: '', province: '', postal: '',
+  country: '', phone: '', email: '', website: '', tax_number: '', footer_note: '',
+  use_letterhead: true, logo_data_url: null,
+}
+
+function CompanyProfileSection() {
+  const currentCompanyId = useStore((s) => s.currentCompanyId)
+  const companies = useStore((s) => s.companies)
+  const [p, setP] = useState<ProfileForm>(EMPTY_PROFILE)
+  const [note, setNote] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const logoRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (currentCompanyId == null) return
+    const row = getCompanyProfile(currentCompanyId)
+    if (row) {
+      setP({
+        display_name: row.display_name ?? '', address_line1: row.address_line1 ?? '', address_line2: row.address_line2 ?? '',
+        city: row.city ?? '', province: row.province ?? '', postal: row.postal ?? '', country: row.country ?? '',
+        phone: row.phone ?? '', email: row.email ?? '', website: row.website ?? '', tax_number: row.tax_number ?? '',
+        footer_note: row.footer_note ?? '', use_letterhead: row.use_letterhead === 1, logo_data_url: row.logo_data_url ?? null,
+      })
+    } else {
+      setP(EMPTY_PROFILE)
+    }
+    setNote(null); setErr(null)
+  }, [currentCompanyId])
+
+  const companyName = companies.find((c) => c.id === currentCompanyId)?.name ?? ''
+  const set = (k: keyof ProfileForm, v: string | boolean | null) => setP((prev) => ({ ...prev, [k]: v }))
+
+  function onLogo(file: File | null) {
+    setErr(null)
+    if (!file) return
+    if (file.size > 500_000) { setErr('Logo is larger than 500 KB — please use a smaller image.'); return }
+    const reader = new FileReader()
+    reader.onload = () => set('logo_data_url', typeof reader.result === 'string' ? reader.result : null)
+    reader.onerror = () => setErr('Could not read that image.')
+    reader.readAsDataURL(file)
+  }
+
+  function save() {
+    if (currentCompanyId == null) return
+    const nn = (s: string) => (s.trim() ? s.trim() : null)
+    const patch: CompanyProfileInput = {
+      display_name: nn(p.display_name), address_line1: nn(p.address_line1), address_line2: nn(p.address_line2),
+      city: nn(p.city), province: nn(p.province), postal: nn(p.postal), country: nn(p.country),
+      phone: nn(p.phone), email: nn(p.email), website: nn(p.website), tax_number: nn(p.tax_number),
+      footer_note: nn(p.footer_note), use_letterhead: p.use_letterhead, logo_data_url: p.logo_data_url,
+    }
+    saveCompanyProfile(currentCompanyId, patch)
+    setNote('Saved. New prints use this letterhead.')
+  }
+
+  if (currentCompanyId == null) return null
+  const field = (k: keyof ProfileForm, placeholder: string, cls = '') => (
+    <input className={clsx('rounded-md border border-slate-300 px-3 py-1.5 text-sm', cls)} placeholder={placeholder}
+      value={p[k] as string} onChange={(e) => set(k, e.target.value)} />
+  )
+
+  return (
+    <Section icon={<Building2 size={18} />} title="Company profile & letterhead" subtitle={`Branding on printed invoices & statements${companyName ? ` — ${companyName}` : ''}.`}>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          {p.logo_data_url ? (
+            <img src={p.logo_data_url} alt="Logo" className="h-14 max-w-[180px] rounded border border-slate-200 object-contain p-1" />
+          ) : (
+            <div className="grid h-14 w-14 place-items-center rounded border border-dashed border-slate-300 text-slate-300"><ImageIcon size={20} /></div>
+          )}
+          <div className="flex gap-2">
+            <button className="btn-outline" onClick={() => logoRef.current?.click()}><Upload size={15} /> {p.logo_data_url ? 'Replace logo' : 'Upload logo'}</button>
+            {p.logo_data_url && <button className="btn-outline text-rose-600 hover:bg-rose-50" onClick={() => set('logo_data_url', null)}>Remove</button>}
+            <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={(e) => { onLogo(e.target.files?.[0] ?? null); e.target.value = '' }} />
+          </div>
+        </div>
+
+        {field('display_name', 'Name shown on documents (defaults to the company name)', 'w-full')}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {field('address_line1', 'Address line 1')}
+          {field('address_line2', 'Address line 2')}
+          {field('city', 'City')}
+          <div className="grid grid-cols-2 gap-3">{field('province', 'Prov/State')}{field('postal', 'Postal/ZIP')}</div>
+          {field('country', 'Country')}
+          {field('tax_number', 'Tax # (GST/HST, VAT, EIN…)')}
+          {field('phone', 'Phone')}
+          {field('email', 'Email')}
+          {field('website', 'Website')}
+        </div>
+        <textarea className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" rows={2}
+          placeholder="Footer note (payment terms, remittance details…)" value={p.footer_note} onChange={(e) => set('footer_note', e.target.value)} />
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={p.use_letterhead} onChange={(e) => set('use_letterhead', e.target.checked)} />
+          Print our letterhead at the top. Uncheck if you print onto your own pre-printed stationery (leaves the top blank).
+        </label>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="btn-primary" onClick={save}><Save size={15} /> Save profile</button>
+          <button className="btn-outline" onClick={() => previewLetterhead(currentCompanyId)}>Preview</button>
+        </div>
+        {err && <div className="rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{err}</div>}
+        {note && <div className="rounded-lg bg-emerald-50 px-4 py-2 text-sm text-emerald-700">{note}</div>}
       </div>
     </Section>
   )

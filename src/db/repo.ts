@@ -4,6 +4,7 @@ import type {
   AccountType,
   BankTxn,
   Company,
+  CompanyProfile,
   Contact,
   ContactKind,
   Entry,
@@ -21,6 +22,67 @@ export function listCompanies(): Company[] {
 
 export function getCompany(id: number): Company | undefined {
   return one<Company>('SELECT * FROM companies WHERE id = ?', [id])
+}
+
+// ---- Company profile (letterhead) -----------------------------------------
+
+export function getCompanyProfile(companyId: number): CompanyProfile | undefined {
+  return one<CompanyProfile>('SELECT * FROM company_profiles WHERE company_id = ?', [companyId])
+}
+
+export interface CompanyProfileInput {
+  display_name?: string | null
+  address_line1?: string | null
+  address_line2?: string | null
+  city?: string | null
+  province?: string | null
+  postal?: string | null
+  country?: string | null
+  phone?: string | null
+  email?: string | null
+  website?: string | null
+  tax_number?: string | null
+  logo_data_url?: string | null
+  use_letterhead?: boolean
+  footer_note?: string | null
+}
+
+/** Upsert the company's letterhead profile (form submits the full set). */
+export function saveCompanyProfile(companyId: number, p: CompanyProfileInput): void {
+  const cur = getCompanyProfile(companyId)
+  const v = <K extends keyof CompanyProfileInput>(k: K, fallback: unknown) =>
+    p[k] !== undefined ? (p[k] as unknown) : fallback
+  const useLetter = p.use_letterhead !== undefined ? (p.use_letterhead ? 1 : 0) : cur?.use_letterhead ?? 1
+  run(
+    `INSERT INTO company_profiles
+       (company_id, display_name, address_line1, address_line2, city, province, postal, country,
+        phone, email, website, tax_number, logo_data_url, use_letterhead, footer_note)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(company_id) DO UPDATE SET
+       display_name = excluded.display_name, address_line1 = excluded.address_line1,
+       address_line2 = excluded.address_line2, city = excluded.city, province = excluded.province,
+       postal = excluded.postal, country = excluded.country, phone = excluded.phone,
+       email = excluded.email, website = excluded.website, tax_number = excluded.tax_number,
+       logo_data_url = excluded.logo_data_url, use_letterhead = excluded.use_letterhead,
+       footer_note = excluded.footer_note`,
+    [
+      companyId,
+      v('display_name', cur?.display_name ?? null),
+      v('address_line1', cur?.address_line1 ?? null),
+      v('address_line2', cur?.address_line2 ?? null),
+      v('city', cur?.city ?? null),
+      v('province', cur?.province ?? null),
+      v('postal', cur?.postal ?? null),
+      v('country', cur?.country ?? null),
+      v('phone', cur?.phone ?? null),
+      v('email', cur?.email ?? null),
+      v('website', cur?.website ?? null),
+      v('tax_number', cur?.tax_number ?? null),
+      v('logo_data_url', cur?.logo_data_url ?? null),
+      useLetter,
+      v('footer_note', cur?.footer_note ?? null),
+    ],
+  )
 }
 
 export function createCompany(name: string, legalName?: string, currency = 'CAD'): number {

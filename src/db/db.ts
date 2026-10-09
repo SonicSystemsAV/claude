@@ -195,6 +195,7 @@ export async function resetDatabase(): Promise<void> {
     DROP TABLE IF EXISTS rules;
     DROP TABLE IF EXISTS contacts;
     DROP TABLE IF EXISTS accounts;
+    DROP TABLE IF EXISTS company_profiles;
     DROP TABLE IF EXISTS companies;
     PRAGMA foreign_keys = ON;
   `)
