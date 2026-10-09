@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Users, UserRound, Truck, SlidersHorizontal, Check, Plus, ArrowLeft, Pencil, Trash2, Mail, Phone, Globe, MapPin, ExternalLink } from 'lucide-react'
+import { Users, UserRound, Truck, SlidersHorizontal, Check, Plus, ArrowLeft, Pencil, Trash2, Mail, Phone, Globe, MapPin, ExternalLink, Printer } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
 import { contactSummaries, getContact, getTransactions, softDeleteTransactions, type ContactSummary } from '../db/repo'
 import { openDocuments, getDocumentForEdit, getDocumentByTxnId, type DocumentEditData } from '../db/documents'
+import { printStatement } from '../db/documentPrint'
 import type { Contact, ContactKind, DocType } from '../db/types'
 import { Money } from '../components/Money'
 import { ContactForm } from '../components/ContactForm'
@@ -223,6 +224,13 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
           </p>
         </div>
         <div className="flex gap-2">
+          <button
+            className="btn-outline"
+            title="Statement of account (year to date) — print or save as PDF"
+            onClick={() => printStatement(companyId, id, isSupplier && !isCustomer ? 'ap' : 'ar', `${new Date().getFullYear()}-01-01`, new Date().toISOString().slice(0, 10))}
+          >
+            <Printer size={15} /> Statement
+          </button>
           {canEdit && <button className="btn-outline" onClick={() => setEditing(true)}><Pencil size={15} /> Edit</button>}
           {canEdit && isCustomer && <button className="btn-primary" onClick={() => setNewDoc('invoice')}><Plus size={15} /> Invoice</button>}
           {canEdit && isSupplier && <button className="btn-primary" onClick={() => setNewDoc(isCustomer ? 'bill' : 'expense')}><Plus size={15} /> {isCustomer ? 'Bill' : 'Expense'}</button>}

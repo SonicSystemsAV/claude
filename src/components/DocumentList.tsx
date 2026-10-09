@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
-import { Ban, Pencil } from 'lucide-react'
+import { Ban, Pencil, Printer } from 'lucide-react'
 import { listDocuments, voidDocument, type DocumentWithContact } from '../db/documents'
+import { printDocument } from '../db/documentPrint'
 import type { DocType } from '../db/types'
 import { Money } from './Money'
 import { formatDate } from '../lib/format'
@@ -47,13 +48,13 @@ export function DocumentList({
             <th className="px-2 py-2.5">Status</th>
             <th className="px-2 py-2.5 text-right">Total</th>
             {showBalance && <th className="px-2 py-2.5 text-right">Balance</th>}
-            {canEdit && <th className="w-10 px-3 py-2.5"></th>}
+            <th className="w-20 px-3 py-2.5"></th>
           </tr>
         </thead>
         <tbody>
           {docs.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-5 py-8 text-center text-slate-400">Nothing here yet.</td>
+              <td colSpan={showBalance ? 7 : 6} className="px-5 py-8 text-center text-slate-400">Nothing here yet.</td>
             </tr>
           )}
           {docs.map((d) => (
@@ -72,31 +73,34 @@ export function DocumentList({
                   <Money cents={d.balance_cents} />
                 </td>
               )}
-              {canEdit && (
-                <td className="px-3 py-2.5 text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    {onEdit && isEditable(d) && (
-                      <button className="text-slate-300 hover:text-brand-600" title="Edit" onClick={() => onEdit(d.id)}>
-                        <Pencil size={15} />
-                      </button>
-                    )}
-                    {d.status !== 'void' && (
-                      <button
-                        className="text-slate-300 hover:text-rose-600"
-                        title="Void"
-                        onClick={() => {
-                          if (confirm(`Void ${d.number}? This removes its ledger entries.`)) {
-                            voidDocument(d.id)
-                            onChange()
-                          }
-                        }}
-                      >
-                        <Ban size={15} />
-                      </button>
-                    )}
-                  </div>
-                </td>
-              )}
+              <td className="px-3 py-2.5 text-right">
+                <div className="flex items-center justify-end gap-2">
+                  {d.status !== 'void' && (
+                    <button className="text-slate-300 hover:text-brand-600" title="Print / Save PDF" onClick={() => printDocument(d.id)}>
+                      <Printer size={15} />
+                    </button>
+                  )}
+                  {canEdit && onEdit && isEditable(d) && (
+                    <button className="text-slate-300 hover:text-brand-600" title="Edit" onClick={() => onEdit(d.id)}>
+                      <Pencil size={15} />
+                    </button>
+                  )}
+                  {canEdit && d.status !== 'void' && (
+                    <button
+                      className="text-slate-300 hover:text-rose-600"
+                      title="Void"
+                      onClick={() => {
+                        if (confirm(`Void ${d.number}? This removes its ledger entries.`)) {
+                          voidDocument(d.id)
+                          onChange()
+                        }
+                      }}
+                    >
+                      <Ban size={15} />
+                    </button>
+                  )}
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>
