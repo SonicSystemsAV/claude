@@ -135,22 +135,23 @@ export function buildAssistantRequest(opts: {
 // ---- Transports ------------------------------------------------------------
 
 /**
- * Desktop transport. Routes the request through Tauri's Rust side so the API
- * key and the CORS-free HTTP stay out of the web context.
- *
- * TODO(desktop/tauri): implement a Rust command, e.g. `assistant_chat`, that
- * POSTs to https://api.anthropic.com/v1/messages with headers
- *   x-api-key: <key>
- *   anthropic-version: 2023-06-01
- *   content-type: application/json
- * and returns the parsed message. Then call it here via
- *   const { invoke } = await import('@tauri-apps/api/core')
- *   const res = await invoke('assistant_chat', { req, apiKey })
- * and map res.content (text blocks) → AnthropicResponse.
+ * Desktop transport. Routes the request through the Tauri `assistant_chat`
+ * Rust command (src-tauri/src/assistant.rs) so the API key and the CORS-free
+ * HTTP stay out of the web context. The Rust command receives `apiKey`
+ * (camelCased from `api_key`) and returns the parsed Messages API response.
  */
 export const tauriTransport: AssistantTransport = {
-  async send(): Promise<AnthropicResponse> {
-    throw new Error('AI assistant not yet wired to the desktop (Tauri Rust HTTP) layer.')
+  async send(req: AnthropicRequest, apiKey: string): Promise<AnthropicResponse> {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const data = await invoke<{
+      content?: { type: string; text?: string }[]
+      stop_reason?: string | null
+    }>('assistant_chat', { req, apiKey })
+    const text = (data.content ?? [])
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('')
+    return { text, stopReason: data.stop_reason ?? null }
   },
 }
 
