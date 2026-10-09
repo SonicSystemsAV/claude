@@ -26,6 +26,25 @@ import { formatMoney } from '../lib/money'
 // Default to the current Opus; the user can pick a cheaper model in config.
 export const DEFAULT_ASSISTANT_MODEL = 'claude-opus-5-5'
 
+/** Per-device localStorage keys for the assistant's runtime config. */
+export const ASSISTANT_LS_KEYS = {
+  apiKey: 'sonic.assistant.apiKey',
+  model: 'sonic.assistant.model',
+  workspaceId: 'sonic.assistant.workspaceId',
+} as const
+
+/** Read the saved assistant config from localStorage (empty apiKey if unset/blocked). */
+export function loadAssistantConfig(): AssistantConfig {
+  const read = (k: string): string => {
+    try { return localStorage.getItem(k) ?? '' } catch { return '' }
+  }
+  return {
+    apiKey: read(ASSISTANT_LS_KEYS.apiKey),
+    workspaceId: read(ASSISTANT_LS_KEYS.workspaceId) || undefined,
+    model: read(ASSISTANT_LS_KEYS.model) || DEFAULT_ASSISTANT_MODEL,
+  }
+}
+
 export interface AssistantConfig {
   /** The user's Anthropic API key (runtime only; store per-device, never in the book file). */
   apiKey: string

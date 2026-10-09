@@ -40,6 +40,7 @@ import Audit from './pages/Audit'
 import RecycleBin from './pages/RecycleBin'
 import Rules from './pages/Rules'
 import Settings from './pages/Settings'
+import AssistantWidget from './components/AssistantWidget'
 import { countUnmatched } from './db/repo'
 
 interface NavItem { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }
@@ -228,6 +229,7 @@ export default function App() {
             <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>
+      <AssistantWidget />
     </div>
   )
 }

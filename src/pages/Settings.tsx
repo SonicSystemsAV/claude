@@ -11,7 +11,7 @@ import { formatDate } from '../lib/format'
 import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
 import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
-import { askAssistant, DEFAULT_ASSISTANT_MODEL } from '../db/assistant'
+import { askAssistant, DEFAULT_ASSISTANT_MODEL, ASSISTANT_LS_KEYS } from '../db/assistant'
 import { formatMoney } from '../lib/money'
 import { CURRENCIES, DEFAULT_CURRENCY } from '../db/currency'
 import { listUsers, createUser, setUserRole, setUserActive, setUserPassword, deleteUser, type Role, type User } from '../db/users'
@@ -548,9 +548,9 @@ function PeriodLockSection() {
   )
 }
 
-const ASSISTANT_KEY_LS = 'sonic.assistant.apiKey'
-const ASSISTANT_MODEL_LS = 'sonic.assistant.model'
-const ASSISTANT_WS_LS = 'sonic.assistant.workspaceId'
+const ASSISTANT_KEY_LS = ASSISTANT_LS_KEYS.apiKey
+const ASSISTANT_MODEL_LS = ASSISTANT_LS_KEYS.model
+const ASSISTANT_WS_LS = ASSISTANT_LS_KEYS.workspaceId
 
 function AssistantSection() {
   const currentCompanyId = useStore((s) => s.currentCompanyId)
