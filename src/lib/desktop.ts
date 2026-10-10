@@ -76,15 +76,15 @@ export async function writeBook(path: string, bytes: Uint8Array): Promise<void> 
   try {
     if (await exists(path)) await remove(path)
     await rename(tmp, path)
-  } catch (e) {
-    // Fall back to a direct write if rename isn't permitted on this filesystem.
+  } catch {
+    // Atomic rename not permitted/available on this filesystem — a direct
+    // overwrite is still a valid save, so fall back to it rather than failing.
     await writeFile(path, bytes)
     try {
       if (await exists(tmp)) await remove(tmp)
     } catch {
-      /* ignore */
+      /* leftover temp file — harmless */
     }
-    throw e instanceof Error ? e : new Error(String(e))
   }
 }
 
