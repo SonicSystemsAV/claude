@@ -120,6 +120,7 @@ export function deleteCompany(companyId: number): void {
     run('DELETE FROM contacts WHERE company_id = ?', [companyId])
     run('DELETE FROM accounts WHERE company_id = ?', [companyId])
     run('DELETE FROM audit_log WHERE company_id = ?', [companyId])
+    run('DELETE FROM company_profiles WHERE company_id = ?', [companyId])
     run('DELETE FROM companies WHERE id = ?', [companyId])
   })
 }
