@@ -6,9 +6,9 @@
 //! the app's client id/secret and form-encoded bodies; the company id (realmId)
 //! arrives as a query param on the OAuth redirect, not in the token response.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
+
+use crate::oauth_loopback::capture_redirect;
 
 const TOKEN_URL: &str = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const AUTHORIZE_URL: &str = "https://appcenter.intuit.com/connect/oauth2";
@@ -54,58 +54,27 @@ pub fn qbo_oauth(
     )
     .map_err(|e| format!("bad authorize URL: {e}"))?;
 
-    let server = tiny_http::Server::http(("127.0.0.1", redirect_port))
-        .map_err(|e| format!("could not start local listener on port {redirect_port}: {e}"))?;
-    webbrowser::open(authorize_url.as_str()).map_err(|e| format!("could not open browser: {e}"))?;
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(300);
-    let (code, realm_id, got_state) = loop {
-        if std::time::Instant::now() >= deadline {
-            return Err("Timed out waiting for QuickBooks authorization (5 min).".into());
+    let url = capture_redirect(redirect_port, authorize_url.as_str(), 300)?;
+    let parsed = reqwest::Url::parse(&format!("http://localhost{url}"))
+        .map_err(|e| format!("bad redirect URL: {e}"))?;
+    let mut code: Option<String> = None;
+    let mut realm: Option<String> = None;
+    let mut got_state = String::new();
+    let mut err: Option<String> = None;
+    for (k, v) in parsed.query_pairs() {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "realmId" => realm = Some(v.into_owned()),
+            "state" => got_state = v.into_owned(),
+            "error" => err = Some(v.into_owned()),
+            _ => {}
         }
-        match server.recv_timeout(Duration::from_secs(2)) {
-            Ok(Some(req)) => {
-                let url = req.url().to_string();
-                if !url.starts_with("/callback") {
-                    let _ = req.respond(tiny_http::Response::from_string("Not found").with_status_code(404));
-                    continue;
-                }
-                let parsed = reqwest::Url::parse(&format!("http://localhost{url}"))
-                    .map_err(|e| format!("bad redirect URL: {e}"))?;
-                let mut code: Option<String> = None;
-                let mut realm: Option<String> = None;
-                let mut st: Option<String> = None;
-                let mut err: Option<String> = None;
-                for (k, v) in parsed.query_pairs() {
-                    match k.as_ref() {
-                        "code" => code = Some(v.into_owned()),
-                        "realmId" => realm = Some(v.into_owned()),
-                        "state" => st = Some(v.into_owned()),
-                        "error" => err = Some(v.into_owned()),
-                        _ => {}
-                    }
-                }
-                let page = "<html><body style=\"font-family:sans-serif;padding:2rem\">\
-                    <h2>QuickBooks connected</h2><p>You can close this window and return to Sonic the Ledgerhog.</p>\
-                    </body></html>";
-                let resp = tiny_http::Response::from_string(page).with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap(),
-                );
-                let _ = req.respond(resp);
-                if let Some(e) = err {
-                    return Err(format!("QuickBooks authorization denied: {e}"));
-                }
-                match (code, realm) {
-                    (Some(c), Some(r)) => break (c, r, st.unwrap_or_default()),
-                    (Some(_), None) => return Err("QuickBooks redirect missing realmId (company id).".into()),
-                    _ => return Err("QuickBooks redirect missing authorization code.".into()),
-                }
-            }
-            Ok(None) => continue,
-            Err(e) => return Err(format!("listener error: {e}")),
-        }
-    };
-
+    }
+    if let Some(e) = err {
+        return Err(format!("QuickBooks authorization denied: {e}"));
+    }
+    let code = code.ok_or("QuickBooks redirect missing authorization code.")?;
+    let realm_id = realm.ok_or("QuickBooks redirect missing realmId (company id).")?;
     if got_state != state {
         return Err("OAuth state mismatch — aborting for safety.".into());
     }

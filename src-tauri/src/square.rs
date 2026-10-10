@@ -9,9 +9,9 @@
 //! These are synchronous Tauri commands (Tauri runs them off the UI thread), so
 //! they use reqwest's blocking client and a small blocking loopback server.
 
-use std::time::Duration;
-
 use serde_json::{json, Value};
+
+use crate::oauth_loopback::capture_redirect;
 
 const SQUARE_VERSION: &str = "2025-01-23";
 
@@ -65,60 +65,25 @@ pub fn square_oauth(
     )
     .map_err(|e| format!("bad authorize URL: {e}"))?;
 
-    // Start the loopback listener BEFORE opening the browser so we can't miss
-    // the redirect.
-    let server = tiny_http::Server::http(("127.0.0.1", redirect_port))
-        .map_err(|e| format!("could not start local listener on port {redirect_port}: {e}"))?;
-
-    webbrowser::open(authorize_url.as_str())
-        .map_err(|e| format!("could not open browser: {e}"))?;
-
-    // Wait (bounded) for Square to redirect back with ?code=...&state=...
-    let deadline = std::time::Instant::now() + Duration::from_secs(300);
-    let (code, got_state) = loop {
-        if std::time::Instant::now() >= deadline {
-            return Err("Timed out waiting for Square authorization (5 min).".into());
+    // Open the consent page and catch the loopback redirect (IPv4 + IPv6).
+    let url = capture_redirect(redirect_port, authorize_url.as_str(), 300)?;
+    let parsed = reqwest::Url::parse(&format!("http://localhost{url}"))
+        .map_err(|e| format!("bad redirect URL: {e}"))?;
+    let mut code: Option<String> = None;
+    let mut got_state = String::new();
+    let mut err: Option<String> = None;
+    for (k, v) in parsed.query_pairs() {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "state" => got_state = v.into_owned(),
+            "error" => err = Some(v.into_owned()),
+            _ => {}
         }
-        match server.recv_timeout(Duration::from_secs(2)) {
-            Ok(Some(req)) => {
-                let url = req.url().to_string();
-                if !url.starts_with("/callback") {
-                    let _ = req.respond(tiny_http::Response::from_string("Not found").with_status_code(404));
-                    continue;
-                }
-                let parsed = reqwest::Url::parse(&format!("http://localhost{url}"))
-                    .map_err(|e| format!("bad redirect URL: {e}"))?;
-                let mut code: Option<String> = None;
-                let mut st: Option<String> = None;
-                let mut err: Option<String> = None;
-                for (k, v) in parsed.query_pairs() {
-                    match k.as_ref() {
-                        "code" => code = Some(v.into_owned()),
-                        "state" => st = Some(v.into_owned()),
-                        "error" => err = Some(v.into_owned()),
-                        _ => {}
-                    }
-                }
-                let body = "<html><body style=\"font-family:sans-serif;padding:2rem\">\
-                    <h2>Square connected</h2><p>You can close this window and return to Sonic the Ledgerhog.</p>\
-                    </body></html>";
-                let resp = tiny_http::Response::from_string(body).with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap(),
-                );
-                let _ = req.respond(resp);
-                if let Some(e) = err {
-                    return Err(format!("Square authorization denied: {e}"));
-                }
-                match code {
-                    Some(c) => break (c, st.unwrap_or_default()),
-                    None => return Err("Square redirect missing authorization code.".into()),
-                }
-            }
-            Ok(None) => continue, // timeout tick — loop and re-check the deadline
-            Err(e) => return Err(format!("listener error: {e}")),
-        }
-    };
-
+    }
+    if let Some(e) = err {
+        return Err(format!("Square authorization denied: {e}"));
+    }
+    let code = code.ok_or("Square redirect missing authorization code.")?;
     if got_state != state {
         return Err("OAuth state mismatch — aborting for safety.".into());
     }

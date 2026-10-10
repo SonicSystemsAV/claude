@@ -1,4 +1,5 @@
 mod assistant;
+mod oauth_loopback;
 mod square;
 mod qbo;
 
