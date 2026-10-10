@@ -18,18 +18,24 @@ const SUCCESS_HTML: &str = "<html><body style=\"font-family:sans-serif;padding:2
 pub fn capture_redirect(port: u16, authorize_url: &str, timeout_secs: u64) -> Result<String, String> {
     // Bind both loopback families; keep whichever succeed (at least one required).
     let mut servers: Vec<tiny_http::Server> = Vec::new();
-    if let Ok(s) = tiny_http::Server::http(("127.0.0.1", port)) {
+    let v4 = tiny_http::Server::http(("127.0.0.1", port));
+    let v4_ok = v4.is_ok();
+    if let Ok(s) = v4 {
         servers.push(s);
     }
-    if let Ok(s) = tiny_http::Server::http(("::1", port)) {
+    let v6 = tiny_http::Server::http(("::1", port));
+    let v6_ok = v6.is_ok();
+    if let Ok(s) = v6 {
         servers.push(s);
     }
+    eprintln!("[oauth] listener bound ipv4={v4_ok} ipv6={v6_ok} port={port}");
     if servers.is_empty() {
         return Err(format!(
             "Could not start the local sign-in listener on port {port} (is it already in use?)."
         ));
     }
 
+    eprintln!("[oauth] opening browser to: {authorize_url}");
     webbrowser::open(authorize_url).map_err(|e| format!("could not open browser: {e}"))?;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
