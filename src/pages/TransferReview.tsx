@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ArrowDownLeft,
   ArrowUpRight,
+  ArrowLeftRight,
   Scale,
   Users,
   Link2,
@@ -58,7 +59,7 @@ export default function TransferReview() {
   const [bump, setBump] = useState(0)
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
-  const [windowDays, setWindowDays] = useState(7)
+  const [windowDays, setWindowDays] = useState(5)
   const [filter, setFilter] = useState<FilterMode>('flagged')
 
   const report = useMemo(
@@ -76,7 +77,7 @@ export default function TransferReview() {
   const shown = report.movements.filter((m) => {
     if (filter === 'all') return true
     if (filter === 'flagged') return m.flags.length > 0 && m.confirmed?.resolution !== 'ignored'
-    if (filter === 'internal') return m.counterparty.type === 'internal'
+    if (filter === 'internal') return m.counterparty.type === 'internal' || m.movement.selfTransfer === true || m.candidates.length > 0
     if (filter === 'recipients') return m.counterparty.type === 'recipient'
     return true
   })
@@ -104,12 +105,11 @@ export default function TransferReview() {
           <input type="date" className="rounded-md border border-slate-300 px-2 py-1.5" value={end} onChange={(e) => setEnd(e.target.value)} />
         </label>
         <label className="text-sm">
-          <span className="mb-1 block text-xs font-medium text-slate-500">Match window</span>
+          <span className="mb-1 block text-xs font-medium text-slate-500">Deposit lands within</span>
           <select className="rounded-md border border-slate-300 px-2 py-1.5" value={windowDays} onChange={(e) => setWindowDays(Number(e.target.value))}>
-            <option value={2}>±2 days</option>
-            <option value={7}>±7 days</option>
-            <option value={14}>±14 days</option>
-            <option value={30}>±30 days</option>
+            <option value={3}>3 days</option>
+            <option value={5}>5 days</option>
+            <option value={7}>7 days</option>
           </select>
         </label>
         {(start || end) && (
@@ -234,6 +234,7 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
   const [open, setOpen] = useState(false)
   const m = rm.movement
   const resolved = rm.confirmed
+  const selfTransfer = m.selfTransfer === true
   const hasFlags = rm.flags.length > 0
   const isIgnored = resolved?.resolution === 'ignored'
   const isExternal = resolved?.resolution === 'external'
@@ -243,28 +244,36 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
     <div className={clsx('card overflow-hidden', hasFlags && !isIgnored && !isMatched && !isExternal && 'ring-1 ring-amber-200')}>
       <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={() => setOpen((o) => !o)}>
         <span className="text-slate-300">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
-        <span className={clsx('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full', m.direction === 'out' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500')}>
-          {m.direction === 'out' ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />}
+        <span className={clsx('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full', selfTransfer ? 'bg-slate-100 text-slate-500' : m.direction === 'out' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500')}>
+          {selfTransfer ? <ArrowLeftRight size={15} /> : m.direction === 'out' ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-slate-800">{m.companyName}</span>
             <span className="text-xs text-slate-400">{formatDate(m.date)}</span>
-            {m.contactName && <span className="truncate text-xs text-slate-500">· {m.contactName}</span>}
+            {m.contactName && !selfTransfer && <span className="truncate text-xs text-slate-500">· {m.contactName}</span>}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{KIND_LABEL[m.kind]}</span>
-            {rm.counterparty.type === 'internal' && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-600">↔ {rm.counterparty.companyName}</span>}
-            {rm.counterparty.type === 'recipient' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">recipient</span>}
+            {selfTransfer ? (
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{m.transferFromName} → {m.transferToName}</span>
+            ) : (
+              <>
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{KIND_LABEL[m.kind]}</span>
+                <span className="rounded bg-slate-50 px-1.5 py-0.5 text-slate-500">{m.direction === 'out' ? 'from' : 'into'} {m.bankAccountName}</span>
+                {rm.counterparty.type === 'internal' && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-600">↔ {rm.counterparty.companyName}</span>}
+                {rm.counterparty.type === 'recipient' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">recipient</span>}
+              </>
+            )}
           </div>
         </div>
         <div className="shrink-0 text-right">
-          <Money cents={m.signedCents} colored className="font-semibold" />
+          <Money cents={selfTransfer ? Math.abs(m.signedCents) : m.signedCents} colored={!selfTransfer} className="font-semibold" />
           <div className="mt-0.5 flex items-center justify-end gap-1">
+            {selfTransfer && <span className="text-xs text-slate-400">internal transfer</span>}
             {isMatched && <span className="inline-flex items-center gap-1 text-xs text-emerald-600"><CheckCircle2 size={12} /> matched</span>}
             {isExternal && <span className="text-xs text-slate-500">external</span>}
             {isIgnored && <span className="text-xs text-slate-400">ignored</span>}
-            {!resolved && rm.flags.map((f) => (
+            {!resolved && !selfTransfer && rm.flags.map((f) => (
               <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700"><AlertTriangle size={11} /> {FLAG_LABEL[f]}</span>
             ))}
           </div>
@@ -275,15 +284,26 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
         <div className="border-t border-slate-100 bg-slate-50/50 px-4 py-3 text-sm">
           {/* Categorization of both-side legs */}
           <div className="mb-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">How this side is categorized</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              {selfTransfer ? 'Moved between own accounts' : 'How this side is categorized'}
+            </div>
             <ul className="mt-1 space-y-0.5">
-              {m.otherLegs.map((l, i) => (
-                <li key={i} className="flex items-center justify-between">
-                  <span className="text-slate-700">{l.accountCode} {l.accountName} <span className="text-slate-400">({l.accountType})</span></span>
-                  <Money cents={l.amountCents} />
+              {selfTransfer ? (
+                <li className="flex items-center justify-between">
+                  <span className="text-slate-700">{m.transferFromName} <ArrowLeftRight size={12} className="inline text-slate-400" /> {m.transferToName}</span>
+                  <Money cents={Math.abs(m.signedCents)} />
                 </li>
-              ))}
-              {m.otherLegs.length === 0 && <li className="text-amber-600">No offsetting account — needs categorizing.</li>}
+              ) : (
+                <>
+                  {m.otherLegs.map((l, i) => (
+                    <li key={i} className="flex items-center justify-between">
+                      <span className="text-slate-700">{l.accountCode} {l.accountName} <span className="text-slate-400">({l.accountType})</span></span>
+                      <Money cents={l.amountCents} />
+                    </li>
+                  ))}
+                  {m.otherLegs.length === 0 && <li className="text-amber-600">No offsetting account — needs categorizing.</li>}
+                </>
+              )}
             </ul>
             {m.memo && <div className="mt-1 text-xs text-slate-500">Memo: {m.memo}</div>}
           </div>
@@ -298,7 +318,7 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
           )}
 
           {/* Candidate pick-list */}
-          {rm.counterparty.type === 'internal' && rm.candidates.length > 0 && (
+          {rm.candidates.length > 0 && (
             <div className="mb-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 {isMatched ? 'Matched to' : 'Possible matches — pick the right one'}
@@ -321,6 +341,7 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
           )}
 
           {/* Actions */}
+          {!selfTransfer && (
           <div className="flex flex-wrap items-center gap-2">
             {resolved ? (
               <button className="btn-ghost text-xs" onClick={() => { clearReview(m.companyId, m.txnId); onChange() }}>
@@ -337,6 +358,7 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
               </>
             )}
           </div>
+          )}
         </div>
       )}
     </div>
@@ -350,6 +372,7 @@ function CandidateRow({ cand, chosen, disabled, onPick }: { cand: MatchCandidate
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-slate-800">{cm.companyName}</span>
+          <span className="text-xs text-slate-500">{cm.direction === 'in' ? 'into' : 'from'} {cm.bankAccountName}</span>
           <span className="text-xs text-slate-400">{formatDate(cm.date)}</span>
         </div>
         <div className="text-xs text-slate-500">{cand.reasons.join(' · ')}</div>

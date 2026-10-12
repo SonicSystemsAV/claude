@@ -65,18 +65,26 @@ export interface BankMovement {
   source: string
   contactId: number | null
   contactName: string | null
+  /** The cash account (bank or credit card) this movement hit. */
   bankAccountId: number
   bankAccountName: string
   /** Bank sign: + money in (deposit), − money out (withdrawal). */
   signedCents: number
   direction: 'in' | 'out'
-  /** Non-bank GL legs — what the money was for. */
+  /** Non-cash GL legs — what the money was for. */
   otherLegs: MovementLeg[]
   /** Linked source-document type, when the txn came from a document. */
   docType: string | null
   kind: MovementKind
   /** The account name the classification keyed on (for display / debugging). */
   primaryAccountName: string | null
+  /** True when the whole transaction just moves money between two of this
+   *  company's own cash accounts (e.g. chequing → credit card). Self-contained
+   *  and already balanced, so it needs no cross matching. */
+  selfTransfer?: boolean
+  /** For a self-transfer: the account money left / landed in. */
+  transferFromName?: string | null
+  transferToName?: string | null
 }
 
 export type Counterparty =
@@ -210,7 +218,8 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
     params.push(opts.endDate)
   }
 
-  // Every posted, non-recycled txn that has at least one entry on a bank account.
+  // Every posted, non-recycled txn that touches a cash account — a bank account
+  // or a credit-card account (credit cards move money internally too).
   const rows = all<{
     txn_id: number
     company_id: number
@@ -232,7 +241,7 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
        JOIN accounts a ON a.id = e.account_id
        LEFT JOIN contacts ct ON ct.id = t.contact_id
        LEFT JOIN documents d ON d.transaction_id = t.id
-      WHERE a.is_bank = 1 AND t.deleted = 0 AND t.status <> 'void' ${dateWhere}
+      WHERE ${CASH_ACCOUNT_SQL} AND t.deleted = 0 AND t.status <> 'void' ${dateWhere}
       ORDER BY t.date, t.id`,
     params,
   )
@@ -252,12 +261,12 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
         WHERE e.transaction_id = ?`,
       [r.txn_id],
     )
-    const bankLegs = legs.filter((l) => l.is_bank === 1)
-    const otherLegs = legs.filter((l) => l.is_bank !== 1)
-    const signedCents = bankLegs.reduce((s, l) => s + l.amount_cents, 0)
-    if (signedCents === 0) continue // not a real cash movement (e.g. two bank legs netting)
+    const cashLegs = legs.filter(isCashLeg)
+    const otherLegs = legs.filter((l) => !isCashLeg(l))
+    if (cashLegs.length === 0) continue
+    const otherSum = otherLegs.reduce((s, l) => s + l.amount_cents, 0)
 
-    const m: BankMovement = {
+    const base = {
       companyId: r.company_id,
       companyName: r.company_name,
       txnId: r.txn_id,
@@ -267,8 +276,38 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
       source: r.source,
       contactId: r.contact_id,
       contactName: r.contact_name,
-      bankAccountId: bankLegs[0].account_id,
-      bankAccountName: bankLegs.map((l) => l.name).join(' / '),
+      docType: r.doc_type,
+    }
+
+    // Self-contained internal transfer: two+ cash legs, nothing booked outside
+    // cash (e.g. chequing → savings, or a credit-card payment from chequing).
+    if (cashLegs.length >= 2 && Math.abs(otherSum) < 1) {
+      const fromLeg = cashLegs.filter((l) => l.amount_cents < 0).sort((a, b) => a.amount_cents - b.amount_cents)[0]
+      const toLeg = cashLegs.filter((l) => l.amount_cents > 0).sort((a, b) => b.amount_cents - a.amount_cents)[0]
+      const amt = Math.abs(toLeg?.amount_cents ?? fromLeg?.amount_cents ?? 0)
+      movements.push({
+        ...base,
+        bankAccountId: (fromLeg ?? cashLegs[0]).account_id,
+        bankAccountName: cashLegs.map((l) => l.name).join(' → '),
+        signedCents: -amt,
+        direction: 'out',
+        otherLegs: [],
+        kind: 'bank_transfer',
+        primaryAccountName: null,
+        selfTransfer: true,
+        transferFromName: fromLeg?.name ?? null,
+        transferToName: toLeg?.name ?? null,
+      })
+      continue
+    }
+
+    const signedCents = cashLegs.reduce((s, l) => s + l.amount_cents, 0)
+    if (signedCents === 0) continue
+
+    const m: BankMovement = {
+      ...base,
+      bankAccountId: cashLegs[0].account_id,
+      bankAccountName: cashLegs.map((l) => l.name).join(' / '),
       signedCents,
       direction: signedCents > 0 ? 'in' : 'out',
       otherLegs: otherLegs.map((l) => ({
@@ -278,17 +317,29 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
         accountType: l.type,
         amountCents: l.amount_cents,
       })),
-      docType: r.doc_type,
       kind: 'other',
       primaryAccountName: null,
     }
-    // Both-sides-bank => a transfer between this company's own bank accounts.
-    const classified = classifyMovement(m, otherLegs.length === 0 && bankLegs.length > 1)
+    const classified = classifyMovement(m)
     m.kind = classified.kind
     m.primaryAccountName = classified.primaryAccountName
     movements.push(m)
   }
   return movements
+}
+
+/** SQL predicate: an account that holds spendable money — a bank account or a
+ *  credit-card liability account. */
+const CASH_ACCOUNT_SQL = `(a.is_bank = 1 OR (a.type = 'liability' AND (
+  LOWER(a.name) LIKE '%credit card%' OR LOWER(a.name) LIKE '%visa%' OR
+  LOWER(a.name) LIKE '%mastercard%' OR LOWER(a.name) LIKE '%master card%' OR
+  LOWER(a.name) LIKE '%amex%' OR LOWER(a.name) LIKE '%american express%')))`
+
+const CREDIT_CARD_RE = /credit card|visa|mastercard|master card|amex|american express/i
+
+/** A cash leg: a bank account, or a credit-card liability account. */
+function isCashLeg(l: { is_bank: number; type: string; name: string }): boolean {
+  return l.is_bank === 1 || (l.type === 'liability' && CREDIT_CARD_RE.test(l.name))
 }
 
 // ---------------------------------------------------------------------------
@@ -439,50 +490,44 @@ export function identifyCounterparty(
 // 4. Candidate matching
 // ---------------------------------------------------------------------------
 
-function dayGap(a: string, b: string): number {
+/** Signed day gap: days from `a` to `b` (positive when b is later). */
+function daysBetween(a: string, b: string): number {
   const da = Date.parse(a)
   const db = Date.parse(b)
   if (Number.isNaN(da) || Number.isNaN(db)) return 9999
-  return Math.round(Math.abs(da - db) / 86_400_000)
+  return Math.round((db - da) / 86_400_000)
 }
 
-/** Score a candidate inflow against an outflow (mirror amounts, near dates). */
+/**
+ * Score a candidate counter-movement. A genuine transfer requires:
+ *  - EXACT amount (to the cent), and
+ *  - the deposit on/after the withdrawal, within `windowDays` (money leaves
+ *    first and lands the same day or a few days later — e.g. a Friday transfer
+ *    before a long weekend clears the following week).
+ * One small day of slack is allowed the other way for posting/timezone quirks.
+ */
 function scoreCandidate(
   src: BankMovement,
   cand: BankMovement,
   windowDays: number,
   distinct: Map<number, string[]>,
 ): MatchCandidate | null {
-  const sameAmount = Math.abs(src.signedCents) === Math.abs(cand.signedCents)
-  const gap = dayGap(src.date, cand.date)
-  // Allow a near-amount candidate within 1% or $5, so true matches that were
-  // keyed slightly differently (fees, rounding) still surface for review.
-  const amtDelta = Math.abs(Math.abs(src.signedCents) - Math.abs(cand.signedCents))
-  const nearAmount = amtDelta <= Math.max(500, Math.round(Math.abs(src.signedCents) * 0.01))
-  if (!sameAmount && !nearAmount) return null
-  if (gap > Math.max(windowDays, 45)) return null // hard ceiling
+  if (Math.abs(src.signedCents) !== Math.abs(cand.signedCents)) return null // exact amount only
 
-  const reasons: string[] = []
-  let score = 0
-  if (sameAmount) {
-    score += 100
-    reasons.push('exact amount')
-  } else {
-    score += 40
-    reasons.push('amount within tolerance')
-  }
+  const outM = src.direction === 'out' ? src : cand
+  const inM = src.direction === 'out' ? cand : src
+  const lag = daysBetween(outM.date, inM.date) // deposit date − withdrawal date
+  if (lag < -1 || lag > windowDays) return null
+  const gap = Math.abs(lag)
+
+  const reasons: string[] = ['exact amount']
+  let score = 100
   if (gap === 0) {
     score += 60
     reasons.push('same day')
-  } else if (gap <= 2) {
-    score += 45
-    reasons.push(`${gap}d apart`)
-  } else if (gap <= windowDays) {
-    score += 25
-    reasons.push(`${gap}d apart`)
   } else {
-    score += 5
-    reasons.push(`${gap}d apart`)
+    score += Math.max(10, 50 - gap * 7)
+    reasons.push(`lands ${gap}d later`)
   }
   // Mutual naming raises confidence — but only via STRONG tokens, so two "Sonic"
   // companies don't look like they reference each other just by sharing "Sonic".
@@ -497,7 +542,9 @@ function scoreCandidate(
     score += 15
     reasons.push('one references the other')
   }
-  return { movement: cand, score, reasons, sameAmount, dayGap: gap }
+  if (cand.companyId === src.companyId) reasons.push(`→ ${cand.bankAccountName}`)
+  else reasons.push(`${cand.companyName} · ${cand.bankAccountName}`)
+  return { movement: cand, score, reasons, sameAmount: true, dayGap: gap }
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +611,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   // Recurring-recipient tally over external outflows.
   const recipientCounts = new Map<string, number>()
   for (const m of movements) {
+    if (m.selfTransfer) continue
     if (m.direction === 'out' && m.contactName) {
       const key = m.contactName.trim().toLowerCase()
       recipientCounts.set(key, (recipientCounts.get(key) ?? 0) + 1)
@@ -574,61 +622,75 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   const reviewByTxn = new Map<string, InterCoReview>()
   for (const r of reviews) reviewByTxn.set(`${r.company_id}:${r.txn_id}`, r)
 
-  // Pre-split by direction for matching.
+  // Pre-split by direction for matching (self-transfers are never a counter-side).
   const byDirection = { in: [] as BankMovement[], out: [] as BankMovement[] }
-  for (const m of movements) byDirection[m.direction].push(m)
+  for (const m of movements) if (!m.selfTransfer) byDirection[m.direction].push(m)
 
   const reviewed: ReviewedMovement[] = movements.map((m) => {
     const counterparty = identifyCounterparty(m, companies, distinct, recipientMinCount, recipientCounts)
     const confirmed = reviewByTxn.get(`${m.companyId}:${m.txnId}`) ?? null
 
-    // Candidates: only for internal movements — look at the opposite direction
-    // in OTHER companies (an outflow here should meet an inflow there).
+    const flags: TransferFlag[] = []
+    const notes: string[] = []
+
+    // A self-contained transfer between the company's own cash accounts is
+    // already balanced — show it, but it needs no matching or flags.
+    if (m.selfTransfer) {
+      return { movement: m, counterparty, candidates: [], confirmed, flags, notes }
+    }
+
+    // Look for the other side when this looks like a transfer: it names another
+    // company, or it was coded to a transfer / loan / due-to-from account.
+    const isTransferish = m.kind === 'transfer_out' || m.kind === 'transfer_in'
+    const shouldSearch = counterparty.type === 'internal' || isTransferish
+
     let candidates: MatchCandidate[] = []
-    if (counterparty.type === 'internal') {
+    if (shouldSearch) {
       const pool = m.direction === 'out' ? byDirection.in : byDirection.out
       candidates = pool
-        .filter((c) => c.companyId !== m.companyId)
+        .filter((c) => {
+          if (c.selfTransfer) return false
+          if (c.companyId === m.companyId) {
+            // Intra-company: a move to a DIFFERENT own account, and only when
+            // both sides were coded as transfers (keeps ordinary same-company
+            // sales/expenses that happen to share an amount out of the list).
+            if (c.bankAccountId === m.bankAccountId) return false
+            return isTransferish && (c.kind === 'transfer_out' || c.kind === 'transfer_in')
+          }
+          return true // cross-company: any opposite-direction movement
+        })
         .map((c) => scoreCandidate(m, c, windowDays, distinct))
         .filter((c): c is MatchCandidate => c !== null)
         // Prefer the named counterparty company's books first.
         .map((c) =>
-          c.movement.companyId === counterparty.companyId ? { ...c, score: c.score + 20 } : c,
+          counterparty.type === 'internal' && c.movement.companyId === counterparty.companyId
+            ? { ...c, score: c.score + 20 }
+            : c,
         )
         .sort((a, b) => b.score - a.score)
         .slice(0, 6)
     }
-
-    const flags: TransferFlag[] = []
-    const notes: string[] = []
 
     if (m.kind === 'vague') {
       flags.push('vague_account')
       notes.push(`Coded to "${m.primaryAccountName ?? 'no account'}" — needs a real category.`)
     }
 
-    if (counterparty.type === 'internal' && confirmed?.resolution !== 'external' && confirmed?.resolution !== 'ignored') {
+    if (shouldSearch && confirmed?.resolution !== 'external' && confirmed?.resolution !== 'ignored') {
       const best = candidates[0]
       const chosen =
         confirmed?.resolution === 'matched' && confirmed.matched_txn_id != null
           ? candidates.find((c) => c.movement.txnId === confirmed.matched_txn_id) ?? null
           : best
+      const where = counterparty.type === 'internal' ? counterparty.companyName : 'the group'
       if (!chosen) {
         flags.push(m.direction === 'out' ? 'unmatched_out' : 'unmatched_in')
         notes.push(
           m.direction === 'out'
-            ? `Money out to ${counterparty.companyName} with no matching deposit found on their books.`
-            : `Money in from ${counterparty.companyName} with no matching withdrawal found on their books.`,
+            ? `Money out with no matching deposit found in ${where} (exact amount, within ${windowDays} days).`
+            : `Money in with no matching withdrawal found in ${where} (exact amount, within ${windowDays} days).`,
         )
       } else {
-        if (!chosen.sameAmount) {
-          flags.push('amount_mismatch')
-          notes.push('Closest match differs in amount — confirm it is the right transaction.')
-        }
-        if (chosen.dayGap > windowDays) {
-          flags.push('date_mismatch')
-          notes.push(`Closest match is ${chosen.dayGap} days away.`)
-        }
         // Type agreement: compare out-side vs in-side classification.
         const outK = m.direction === 'out' ? m.kind : chosen.movement.kind
         const inK = m.direction === 'out' ? chosen.movement.kind : m.kind
@@ -702,7 +764,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
 function buildRecipients(movements: BankMovement[], minCount: number): RecipientSummary[] {
   const map = new Map<string, RecipientSummary>()
   for (const m of movements) {
-    if (m.direction !== 'out' || !m.contactName) continue
+    if (m.selfTransfer || m.direction !== 'out' || !m.contactName) continue
     const key = m.contactName.trim().toLowerCase()
     const row = map.get(key) ?? { name: m.contactName.trim(), count: 0, totalOutCents: 0, companies: [] }
     row.count++
