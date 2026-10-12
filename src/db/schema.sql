@@ -226,6 +226,27 @@ CREATE TABLE IF NOT EXISTS intercompany_links (
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- A user's review decision for one side of an inter-company / recipient transfer.
+-- The transfer review engine discovers movements and candidate matches on the
+-- fly; this table only remembers what the user confirmed. When a match is
+-- confirmed both sides get a row pointing at each other, so either side reads as
+-- resolved. resolution: 'matched' (tied to matched_txn_id in matched_company_id),
+-- 'external' (a genuine outside payment — recipient holds the payee label),
+-- 'ignored' (reviewed, not a concern).
+CREATE TABLE IF NOT EXISTS interco_reviews (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id         INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  txn_id             INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  matched_company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+  matched_txn_id     INTEGER REFERENCES transactions(id),
+  resolution         TEXT NOT NULL DEFAULT 'matched'
+                       CHECK (resolution IN ('matched','external','ignored')),
+  recipient          TEXT,
+  note               TEXT,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (company_id, txn_id)
+);
+
 -- Local user accounts with roles (admin / accountant / viewer).
 CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -15,6 +15,7 @@ import {
   History,
   BadgeCheck,
   Building2,
+  ArrowLeftRight,
   Trash2,
   LogOut,
   ChevronDown,
@@ -26,6 +27,7 @@ import logoDark from './assets/logo-dark.png'
 import coin from './assets/coin-512.png'
 import Dashboard from './pages/Dashboard'
 import Companies from './pages/Companies'
+import TransferReview from './pages/TransferReview'
 import Reconcile from './pages/Reconcile'
 import StatementRec from './pages/StatementRec'
 import Accounts from './pages/Accounts'
@@ -51,6 +53,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
       { to: '/companies', label: 'Companies', icon: Building2 },
+      { to: '/transfers', label: 'Transfer Review', icon: ArrowLeftRight },
     ],
   },
   {
@@ -213,6 +216,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
             <Route path="/companies" element={<Companies />} />
+            <Route path="/transfers" element={<TransferReview />} />
             <Route path="/sales" element={<Sales />} />
             <Route path="/purchases" element={<Purchases />} />
             <Route path="/reconcile" element={<Reconcile />} />
