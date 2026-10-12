@@ -348,31 +348,69 @@ export function kindsAgree(outKind: MovementKind, inKind: MovementKind): boolean
 // 3. Counterparty identification
 // ---------------------------------------------------------------------------
 
-/** Significant tokens of each company name that no OTHER company name shares. */
+// Corporate suffixes — never identifying.
+const NAME_STOP = new Set(['inc', 'ltd', 'llc', 'corp', 'co', 'the', 'and', 'company', 'limited', 'incorporated', 'corporation'])
+// Geographic + ultra-generic business words. These are NOT identifiers: two
+// unrelated numbered companies both say "Ontario", countless firms say
+// "Properties" or "Holdings". A token here can never, on its own, say two names
+// are the same company — only a number or a genuinely distinctive word can.
+const GENERIC_TOKENS = new Set([
+  // provinces / regions / countries / major cities
+  'ontario', 'quebec', 'alberta', 'manitoba', 'saskatchewan', 'british', 'columbia', 'scotia',
+  'brunswick', 'newfoundland', 'labrador', 'yukon', 'nunavut', 'territories', 'canada', 'canadian',
+  'america', 'american', 'usa', 'toronto', 'ottawa', 'mississauga', 'hamilton', 'vaughan', 'markham',
+  'brampton', 'london', 'windsor', 'kitchener', 'waterloo', 'niagara', 'durham', 'york', 'peel',
+  // generic corporate words
+  'properties', 'property', 'holdings', 'holding', 'group', 'groupe', 'services', 'service',
+  'solutions', 'enterprises', 'enterprise', 'ventures', 'venture', 'management', 'consulting',
+  'trading', 'industries', 'industrial', 'capital', 'partners', 'associates', 'consultants',
+  'contracting', 'contractors', 'construction', 'rentals', 'rental', 'leasing', 'investments',
+  'investment', 'international', 'national', 'global', 'worldwide', 'systems', 'solution',
+])
+
+/** Lower-case alphanumeric word tokens of a string (length > 2, suffixes dropped). */
+export function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 2 && !NAME_STOP.has(w))
+}
+
+/** A token strong enough to identify a company by itself: a company number, or a
+ *  distinctive word that isn't geographic/generic. */
+function isStrongToken(t: string): boolean {
+  if (/^\d{3,}$/.test(t)) return true // company number
+  return t.length >= 4 && !GENERIC_TOKENS.has(t)
+}
+
+/**
+ * Strong, distinctive tokens per company — tokens that (a) no other company name
+ * shares and (b) are specific enough to identify it (a number, or a real word,
+ * never a province like "Ontario" or a filler like "Properties"). A numbered
+ * company reduces to its number, so "1933230 Ontario Inc" is identified only by
+ * "1933230" — never by "ontario", which it shares with every other Ontario firm.
+ */
 export function distinctiveTokens(companies: { id: number; name: string }[]): Map<number, string[]> {
-  const STOP = new Set(['inc', 'ltd', 'llc', 'corp', 'co', 'the', 'and', 'company', 'limited', 'incorporated'])
-  const tokensOf = (n: string) =>
-    n
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length > 2 && !STOP.has(w))
   const result = new Map<number, string[]>()
   for (const c of companies) {
-    const mine = tokensOf(c.name)
+    const mine = tokenize(c.name)
     const othersAll = new Set<string>()
-    for (const o of companies) if (o.id !== c.id) tokensOf(o.name).forEach((t) => othersAll.add(t))
-    const distinct = mine.filter((t) => !othersAll.has(t))
-    // If every token is shared, fall back to the full token set so we can still match.
-    result.set(c.id, distinct.length ? distinct : mine)
+    for (const o of companies) if (o.id !== c.id) tokenize(o.name).forEach((t) => othersAll.add(t))
+    const strong = mine.filter((t) => !othersAll.has(t) && isStrongToken(t))
+    // No strong identifier (e.g. a name made only of generic/shared words): leave
+    // empty rather than match on a generic word — a miss beats a false positive.
+    result.set(c.id, strong)
   }
   return result
 }
 
-function textBlob(m: BankMovement): string {
-  return [m.contactName, m.memo, m.reference, ...m.otherLegs.map((l) => l.accountName)]
+/** Token set drawn from a movement's counterparty-identifying text (NOT its own
+ *  company name): contact, memo, reference, and the offsetting account names. */
+function blobTokenSet(m: BankMovement): Set<string> {
+  const text = [m.contactName, m.memo, m.reference, ...m.otherLegs.map((l) => l.accountName)]
     .filter(Boolean)
     .join(' ')
-    .toLowerCase()
+  return new Set(tokenize(text))
 }
 
 export function identifyCounterparty(
@@ -382,12 +420,12 @@ export function identifyCounterparty(
   recipientMinCount: number,
   recipientCounts: Map<string, number>,
 ): Counterparty {
-  const blob = textBlob(m)
-  // Internal: does the movement name another of our companies?
+  const words = blobTokenSet(m)
+  // Internal: does the movement name another of our companies by a STRONG token?
   for (const c of companies) {
     if (c.id === m.companyId) continue
     const toks = distinct.get(c.id) ?? []
-    if (toks.some((t) => blob.includes(t))) return { type: 'internal', companyId: c.id, companyName: c.name }
+    if (toks.some((t) => words.has(t))) return { type: 'internal', companyId: c.id, companyName: c.name }
   }
   // Recurring external recipient (by contact name).
   if (m.contactName) {
@@ -409,7 +447,12 @@ function dayGap(a: string, b: string): number {
 }
 
 /** Score a candidate inflow against an outflow (mirror amounts, near dates). */
-function scoreCandidate(src: BankMovement, cand: BankMovement, windowDays: number): MatchCandidate | null {
+function scoreCandidate(
+  src: BankMovement,
+  cand: BankMovement,
+  windowDays: number,
+  distinct: Map<number, string[]>,
+): MatchCandidate | null {
   const sameAmount = Math.abs(src.signedCents) === Math.abs(cand.signedCents)
   const gap = dayGap(src.date, cand.date)
   // Allow a near-amount candidate within 1% or $5, so true matches that were
@@ -441,9 +484,12 @@ function scoreCandidate(src: BankMovement, cand: BankMovement, windowDays: numbe
     score += 5
     reasons.push(`${gap}d apart`)
   }
-  // Mutual naming raises confidence.
-  const srcNamesCand = textBlob(src).includes(cand.companyName.toLowerCase().split(/\s+/)[0] ?? '')
-  const candNamesSrc = textBlob(cand).includes(src.companyName.toLowerCase().split(/\s+/)[0] ?? '')
+  // Mutual naming raises confidence — but only via STRONG tokens, so two "Sonic"
+  // companies don't look like they reference each other just by sharing "Sonic".
+  const srcWords = blobTokenSet(src)
+  const candWords = blobTokenSet(cand)
+  const srcNamesCand = (distinct.get(cand.companyId) ?? []).some((t) => srcWords.has(t))
+  const candNamesSrc = (distinct.get(src.companyId) ?? []).some((t) => candWords.has(t))
   if (srcNamesCand && candNamesSrc) {
     score += 30
     reasons.push('both reference each other')
@@ -477,9 +523,9 @@ function loanPositionToward(companyId: number, otherTokens: string[]): number {
   )
   let net = 0
   for (const a of accts) {
-    const n = a.name.toLowerCase()
     if (!isTransferAccount(a.name)) continue
-    if (!otherTokens.some((t) => n.includes(t))) continue
+    const words = new Set(tokenize(a.name))
+    if (!otherTokens.some((t) => words.has(t))) continue
     const bal = accountBalanceCents(a.id) // debit-positive raw balance
     // Asset (due-from / loan-to): debit balance = they owe us → +.
     // Liability (due-to / loan-from): credit balance (negative raw) = we owe → −.
@@ -500,7 +546,8 @@ function subledgerBalance(companyId: number, otherTokens: string[], want: 'AP' |
   )
   let sum = 0
   for (const r of rows) {
-    if (!otherTokens.some((t) => (r.name ?? '').toLowerCase().includes(t))) continue
+    const words = new Set(tokenize(r.name ?? ''))
+    if (!otherTokens.some((t) => words.has(t))) continue
     sum += r.balance_cents
   }
   return sum
@@ -542,7 +589,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
       const pool = m.direction === 'out' ? byDirection.in : byDirection.out
       candidates = pool
         .filter((c) => c.companyId !== m.companyId)
-        .map((c) => scoreCandidate(m, c, windowDays))
+        .map((c) => scoreCandidate(m, c, windowDays, distinct))
         .filter((c): c is MatchCandidate => c !== null)
         // Prefer the named counterparty company's books first.
         .map((c) =>
