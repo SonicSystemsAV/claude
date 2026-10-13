@@ -115,33 +115,69 @@ interface JTxn {
   lines: JLine[]
 }
 
+const normHdr = (s: string | undefined): string => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+
+/**
+ * Locate columns in a QBO Journal export by HEADER NAME, not fixed position.
+ * A fixed-position reader silently grabs the wrong column (e.g. a running
+ * Balance) if the export has an extra/missing column, which posts balance-sized
+ * amounts and zero income. We also refuse to ever treat a "Balance" column as an
+ * amount.
+ */
 function parseJournal(text: string): JTxn[] {
   const rows = parseCSV(text)
-  const hi = rows.findIndex((r) => (r[1] || '').trim() === 'Transaction date')
+  const isHeader = (r: string[]) => {
+    const set = r.map(normHdr)
+    return (
+      (set.includes('transaction date') || set.includes('date')) &&
+      (set.includes('debit') || set.includes('credit') || set.includes('amount'))
+    )
+  }
+  const hi = rows.findIndex(isHeader)
   if (hi < 0) return []
+  const header = rows[hi]
+  const find = (aliases: string[]) => header.findIndex((h) => aliases.includes(normHdr(h)))
+  const col = {
+    date: find(['transaction date', 'date', 'posting date']),
+    type: find(['transaction type', 'type']),
+    num: find(['num', 'no.', 'no', 'doc num', '#', 'ref no.', 'ref no']),
+    name: find(['name', 'payee', 'vendor', 'customer']),
+    desc: find(['memo/description', 'memo', 'description', 'details']),
+    account: find(['account', 'account full name', 'distribution account']),
+    debit: find(['debit', 'debits']),
+    credit: find(['credit', 'credits']),
+    amount: find(['amount']),
+  }
+  // Need at least a date, an account, and some amount column. Never use Balance.
+  if (col.date < 0 || col.account < 0 || (col.debit < 0 && col.credit < 0 && col.amount < 0)) return []
+  const g = (r: string[], i: number) => (i >= 0 ? (r[i] || '').trim() : '')
+  const amountOf = (r: string[]) =>
+    col.debit >= 0 || col.credit >= 0 ? money(g(r, col.debit)) - money(g(r, col.credit)) : money(g(r, col.amount))
+
   const txns: JTxn[] = []
   let cur: JTxn | null = null
   for (let i = hi + 1; i < rows.length; i++) {
     const r = rows[i]
     const c0 = (r[0] || '').trim()
     if (c0 && /^total for/i.test(c0)) continue
-    if (c0 && !(r[1] || '').trim()) {
+    const date = g(r, col.date)
+    // A grouping label row (transaction header) has text in col 0 but no date.
+    if (c0 && !date && col.date > 0) {
       cur = { group: c0, lines: [] }
       txns.push(cur)
       continue
     }
-    const date = (r[1] || '').trim()
     if (!date) continue
-    const acct = (r[6] || '').trim()
+    const acct = g(r, col.account)
     if (!acct) continue
     if (!cur) { cur = { group: '(none)', lines: [] }; txns.push(cur) }
     cur.lines.push({
       acct,
-      amount: money(r[7]) - money(r[8]),
-      num: (r[3] || '').trim(),
-      name: (r[4] || '').trim(),
-      desc: (r[5] || '').trim(),
-      type: (r[2] || '').trim(),
+      amount: amountOf(r),
+      num: g(r, col.num),
+      name: g(r, col.name),
+      desc: g(r, col.desc),
+      type: g(r, col.type),
       date: isoDate(date),
     })
   }
@@ -163,6 +199,13 @@ export interface QBOImportSummary {
   unknownAccounts: string[]
   roundingAdjustments: number
   roundingTotalCents: number
+  /** Transactions whose source lines did NOT sum to zero beyond a rounding penny,
+   *  so they were skipped rather than force-balanced with a fabricated plug. A
+   *  non-zero count means the source columns are misaligned or the export is
+   *  incomplete — the import should be re-checked, not trusted. */
+  unbalancedSkipped: number
+  unbalancedTotalCents: number
+  unbalancedSamples: { ref: string; sumCents: number }[]
 }
 
 /** A chart-of-accounts entry to pre-create (preserves full chart + QBO type). */
@@ -281,6 +324,9 @@ export function importQBOData(opts: {
     let skippedZero = 0
     let roundingAdjustments = 0
     let roundingTotalCents = 0
+    let unbalancedSkipped = 0
+    let unbalancedTotalCents = 0
+    const unbalancedSamples: { ref: string; sumCents: number }[] = []
 
     for (const t of opts.transactions) {
       if (t.lines.length === 0) continue
@@ -300,10 +346,23 @@ export function importQBOData(opts: {
 
       const sum = lines.reduce((s, l) => s + l.amount_cents, 0)
       if (sum !== 0) {
-        // QBO rounding penny — balance it out so the entry posts.
-        lines.push({ account_id: ensureRounding(), amount_cents: -sum, memo: 'Rounding' })
-        roundingAdjustments++
-        roundingTotalCents += sum
+        // Only a genuine rounding penny gets a balancing plug. A larger imbalance
+        // means the source lines don't actually balance (misaligned columns, a
+        // partial export) — plugging it would fabricate a balancing entry and
+        // bury corrupt data, so skip the whole transaction and report it instead.
+        const roundingCap = Math.max(5, lines.length * 2) // cents
+        if (Math.abs(sum) <= roundingCap) {
+          lines.push({ account_id: ensureRounding(), amount_cents: -sum, memo: 'Rounding' })
+          roundingAdjustments++
+          roundingTotalCents += sum
+        } else {
+          unbalancedSkipped++
+          unbalancedTotalCents += sum
+          if (unbalancedSamples.length < 25) {
+            unbalancedSamples.push({ ref: t.reference || t.memo || t.date, sumCents: sum })
+          }
+          continue
+        }
       }
 
       // Insert transaction + entries directly (we're already inside the outer tx).
@@ -349,6 +408,9 @@ export function importQBOData(opts: {
       unknownAccounts,
       roundingAdjustments,
       roundingTotalCents,
+      unbalancedSkipped,
+      unbalancedTotalCents,
+      unbalancedSamples,
     }
   })
 }
