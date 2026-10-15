@@ -28,6 +28,9 @@ export type IssueCategory =
   | 'reconcile' // bank items not matched to the ledger
   | 'duplicate' // suspected duplicate transactions
   | 'future' // future-dated transactions
+  | 'draft' // unposted draft transactions
+  | 'wrongsign' // income/expense account carrying a backwards balance
+  | 'swing' // large month-over-month jump in an account
 
 export interface IssueFix {
   /** Route to send the user to in order to work the issue. */
@@ -318,6 +321,157 @@ function checkFutureDated(cos: Co[]): Issue[] {
   return out
 }
 
+/** Draft transactions that were never posted — they don't hit any report, so
+ *  real activity may be silently missing from the books. */
+function checkDrafts(cos: Co[]): Issue[] {
+  const rows = all<{ company_id: number; n: number }>(
+    `SELECT company_id, COUNT(*) AS n
+     FROM transactions WHERE deleted = 0 AND status = 'draft' GROUP BY company_id`,
+  )
+  const byCo = new Map(rows.map((r) => [r.company_id, r]))
+  const out: Issue[] = []
+  for (const c of cos) {
+    const r = byCo.get(c.id)
+    if (!r || r.n === 0) continue
+    out.push({
+      id: `draft:${c.id}`,
+      category: 'draft',
+      severity: 'low',
+      companyId: c.id,
+      companyName: c.name,
+      currency: c.currency,
+      title: `${r.n} draft transaction${r.n === 1 ? '' : 's'} not posted`,
+      detail: `${r.n} transaction${r.n === 1 ? ' is' : 's are'} still a draft, so ${r.n === 1 ? 'it doesn’t' : 'they don’t'} show up in any report. Post or delete ${r.n === 1 ? 'it' : 'them'}.`,
+      count: r.n,
+      amountCents: 0,
+      fix: { route: '/transactions', label: 'Open transactions' },
+    })
+  }
+  return out
+}
+
+// Contra accounts legitimately carry a "backwards" balance (a discount reduces
+// income; a rebate reduces expense), so exclude them from the wrong-sign check.
+const RE_CONTRA = /\b(discount|refund|rebate|return|allowance|contra|reimburse|credit note)\b/i
+const WRONG_SIGN_TOLERANCE = 5000 // $50 — ignore rounding / trivial contra activity
+
+/** Income accounts carrying a net debit balance, or expense accounts carrying a
+ *  net credit balance — usually a transaction booked to the wrong account (e.g.
+ *  an expense coded to an income account), which quietly distorts the P&L. */
+function checkWrongSign(cos: Co[]): Issue[] {
+  const rows = all<{ company_id: number; id: number; name: string; type: string; bal: number }>(`
+    SELECT a.company_id, a.id, a.name, a.type, SUM(e.amount_cents) AS bal
+    FROM accounts a
+    JOIN entries e ON e.account_id = a.id
+    JOIN transactions t ON t.id = e.transaction_id
+    WHERE t.deleted = 0 AND t.status = 'posted' AND a.archived = 0 AND a.type IN ('income', 'expense')
+    GROUP BY a.id
+  `)
+  // bal is debit-positive. Income is credit-normal (expect bal <= 0); expense is
+  // debit-normal (expect bal >= 0).
+  type Bad = { name: string; magnitude: number }
+  const byCo = new Map<number, Bad[]>()
+  for (const r of rows) {
+    if (RE_CONTRA.test(r.name)) continue
+    const wrong = r.type === 'income' ? r.bal > WRONG_SIGN_TOLERANCE : r.bal < -WRONG_SIGN_TOLERANCE
+    if (!wrong) continue
+    const arr = byCo.get(r.company_id) ?? []
+    arr.push({ name: `${r.name}`, magnitude: Math.abs(r.bal) })
+    byCo.set(r.company_id, arr)
+  }
+  const out: Issue[] = []
+  for (const c of cos) {
+    const bad = byCo.get(c.id)
+    if (!bad || !bad.length) continue
+    bad.sort((a, b) => b.magnitude - a.magnitude)
+    const total = bad.reduce((s, b) => s + b.magnitude, 0)
+    const names = bad.slice(0, 4).map((b) => `"${b.name}"`).join(', ')
+    out.push({
+      id: `wrongsign:${c.id}`,
+      category: 'wrongsign',
+      severity: 'medium',
+      companyId: c.id,
+      companyName: c.name,
+      currency: c.currency,
+      title: `${bad.length} account${bad.length === 1 ? '' : 's'} with a backwards balance`,
+      detail: `${names}${bad.length > 4 ? ` and ${bad.length - 4} more` : ''} ${bad.length === 1 ? 'carries' : 'carry'} the wrong sign — income showing as a debit or expense as a credit, usually something booked to the wrong account. Worth checking; a genuine contra account can be ignored.`,
+      count: bad.length,
+      amountCents: total,
+      fix: { route: '/reports', label: 'Open P&L' },
+    })
+  }
+  return out
+}
+
+const SWING_FACTOR = 3 // a month ≥ 3× the typical month…
+const SWING_MIN_DELTA = 300000 // …and at least $3,000 above typical, to flag.
+
+/** Large month-over-month jumps in an expense account — a single month far
+ *  above the account's normal run-rate often means a duplicate, a miscoding, or
+ *  something that belongs spread across periods. */
+function checkSwings(cos: Co[]): Issue[] {
+  const rows = all<{ company_id: number; account_id: number; name: string; ym: string; amt: number }>(`
+    SELECT a.company_id, a.id AS account_id, a.name, substr(t.date, 1, 7) AS ym, SUM(e.amount_cents) AS amt
+    FROM accounts a
+    JOIN entries e ON e.account_id = a.id
+    JOIN transactions t ON t.id = e.transaction_id
+    WHERE t.deleted = 0 AND t.status = 'posted' AND a.archived = 0 AND a.type = 'expense'
+    GROUP BY a.id, ym
+  `)
+  // Group monthly totals per account.
+  const perAccount = new Map<number, { company_id: number; name: string; months: { ym: string; amt: number }[] }>()
+  for (const r of rows) {
+    const g = perAccount.get(r.account_id) ?? { company_id: r.company_id, name: r.name, months: [] }
+    g.months.push({ ym: r.ym, amt: r.amt })
+    perAccount.set(r.account_id, g)
+  }
+  type Flag = { name: string; ym: string; amt: number; typical: number }
+  const byCo = new Map<number, Flag[]>()
+  for (const g of perAccount.values()) {
+    const vals = g.months.map((m) => m.amt).filter((v) => v > 0)
+    if (vals.length < 4) continue // need a run-rate to judge against
+    const peak = g.months.reduce((a, b) => (b.amt > a.amt ? b : a))
+    if (peak.amt <= 0) continue
+    const others = vals.filter((v) => v !== peak.amt)
+    const typical = median(others.length ? others : vals)
+    if (typical <= 0) continue
+    if (peak.amt >= SWING_FACTOR * typical && peak.amt - typical >= SWING_MIN_DELTA) {
+      const arr = byCo.get(g.company_id) ?? []
+      arr.push({ name: g.name, ym: peak.ym, amt: peak.amt, typical })
+      byCo.set(g.company_id, arr)
+    }
+  }
+  const out: Issue[] = []
+  for (const c of cos) {
+    const flags = byCo.get(c.id)
+    if (!flags || !flags.length) continue
+    flags.sort((a, b) => b.amt - a.amt)
+    const f = flags[0]
+    const more = flags.length - 1
+    out.push({
+      id: `swing:${c.id}`,
+      category: 'swing',
+      severity: 'low',
+      companyId: c.id,
+      companyName: c.name,
+      currency: c.currency,
+      title: `${flags.length} unusual month-over-month jump${flags.length === 1 ? '' : 's'}`,
+      detail: `"${f.name}" hit ${fmt(f.amt, c.currency)} in ${f.ym} versus a typical ${fmt(f.typical, c.currency)}/month${more > 0 ? `, plus ${more} other account${more === 1 ? '' : 's'} with a similar spike` : ''}. Often a duplicate or a miscoding — worth a look.`,
+      count: flags.length,
+      amountCents: flags.reduce((s, x) => s + (x.amt - x.typical), 0),
+      fix: { route: '/reports', label: 'Open P&L' },
+    })
+  }
+  return out
+}
+
+function median(xs: number[]): number {
+  if (!xs.length) return 0
+  const s = [...xs].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2)
+}
+
 const CHECKS: ((cos: Co[]) => Issue[])[] = [
   checkUnbalanced,
   checkInterco,
@@ -326,6 +480,9 @@ const CHECKS: ((cos: Co[]) => Issue[])[] = [
   checkReconcile,
   checkDuplicates,
   checkFutureDated,
+  checkDrafts,
+  checkWrongSign,
+  checkSwings,
 ]
 
 /** Run every health check across all companies and return a ranked worklist. */

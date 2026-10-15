@@ -18,6 +18,9 @@ import {
   Sparkles,
   Send,
   CheckCircle2,
+  FileEdit,
+  ArrowDownUp,
+  TrendingUp,
 } from 'lucide-react'
 import { useStore } from '../state/store'
 import { formatMoney } from '../lib/money'
@@ -40,6 +43,9 @@ const CATEGORY_META: Record<IssueCategory, { label: string; icon: typeof Scale }
   reconcile: { label: 'Reconcile', icon: BadgeCheck },
   duplicate: { label: 'Duplicates', icon: Copy },
   future: { label: 'Future-dated', icon: CalendarClock },
+  draft: { label: 'Drafts', icon: FileEdit },
+  wrongsign: { label: 'Wrong sign', icon: ArrowDownUp },
+  swing: { label: 'Big swing', icon: TrendingUp },
 }
 
 const SEVERITY_META: Record<
