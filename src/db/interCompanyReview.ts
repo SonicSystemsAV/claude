@@ -42,6 +42,7 @@ export type MovementKind =
   | 'ap_payment' // money out against Accounts Payable (we paid a bill)
   | 'transfer_out' // money out to an inter-company / loan / due-from account
   | 'transfer_in' // money in from an inter-company / loan / due-to account
+  | 'debt_payment' // money out against a plain liability (mortgage, loan, tax) — not inter-company
   | 'equity' // owner draw / contribution / shareholder loan
   | 'bank_transfer' // moved between two of this same company's bank accounts
   | 'vague' // uncategorized / suspense / ask-my-accountant / no other leg
@@ -196,7 +197,10 @@ const RE_TRANSFER = /\b(due (to|from)|inter.?company|loan (to|from)|loans? (to|f
 const RE_AR = /\b(accounts? receivable|a\/r|trade receivable)\b/i
 const RE_AP = /\b(accounts? payable|a\/p|trade payable)\b/i
 const RE_EQUITY = /\b(draw|drawings|owner|shareholder|dividend|distribution|capital contribution|contributed capital)\b/i
-const RE_VAGUE = /\b(uncategor|ask my accountant|suspense|misc|miscellaneous|to be (determined|classified)|unknown|clearing|opening balance|unapplied|undeposited|holding|pending|other)\b/i
+// Placeholder / needs-a-real-category accounts. Deliberately NOT a bare "other"
+// — that wrongly flags legitimate accounts like "Other Income" / "Other Interest
+// Expense". "Ask my accountant" and "uncategorized" are the real ones to surface.
+const RE_VAGUE = /\b(uncategor|ask my accountant|suspense|to be (determined|classified)|unknown|opening balance|unapplied cash|undeposited)\b/i
 
 function isTransferAccount(name: string): boolean {
   return RE_TRANSFER.test(name)
@@ -374,11 +378,11 @@ export function classifyMovement(
   if (type === 'equity' || RE_EQUITY.test(name)) return { kind: 'equity', primaryAccountName: name }
   if (type === 'income') return { kind: 'sale', primaryAccountName: name }
   if (type === 'expense') return { kind: 'purchase', primaryAccountName: name }
-  // An asset/liability leg we couldn't name-match: treat a plain asset/liability
-  // move as a transfer of value, everything else as "other".
-  if (type === 'asset' || type === 'liability') {
-    return { kind: m.direction === 'out' ? 'transfer_out' : 'transfer_in', primaryAccountName: name }
-  }
+  // A plain liability that ISN'T an inter-company/loan/due account (handled above)
+  // is an ordinary debt payment — a mortgage, bank loan, tax remittance. These are
+  // NOT inter-company transfers and must not be searched for a matching deposit,
+  // or every mortgage payment floods the review queue. Everything else is "other".
+  if (type === 'liability') return { kind: 'debt_payment', primaryAccountName: name }
   return { kind: 'other', primaryAccountName: name }
 }
 

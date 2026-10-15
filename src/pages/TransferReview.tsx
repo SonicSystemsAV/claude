@@ -35,6 +35,7 @@ const KIND_LABEL: Record<MovementKind, string> = {
   ap_payment: 'Payment on bill (A/P)',
   transfer_out: 'Transfer out (loan / due-from)',
   transfer_in: 'Transfer in (loan / due-to)',
+  debt_payment: 'Loan / mortgage / tax payment',
   equity: 'Owner / shareholder equity',
   bank_transfer: 'Between own bank accounts',
   vague: 'Uncategorized',
