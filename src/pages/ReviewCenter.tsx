@@ -21,12 +21,14 @@ import {
   FileEdit,
   ArrowDownUp,
   TrendingUp,
+  Flag,
 } from 'lucide-react'
 import { useStore } from '../state/store'
 import { formatMoney } from '../lib/money'
 import {
   runHealthChecks,
   summarize,
+  topIssues,
   type Issue,
   type IssueCategory,
   type IssueSeverity,
@@ -162,6 +164,32 @@ export default function ReviewCenter() {
             </FilterChip>
           ))}
         </div>
+      )}
+
+      {/* Start here — the few things most worth doing first */}
+      {sevFilter === 'all' && companyFilter === 'all' && issues.length > 5 && (
+        <section className="mb-5 rounded-card border border-orange-200 bg-orange-50/60 p-4">
+          <h2 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-wide text-sonic-orange">
+            <Flag size={14} /> Start here
+          </h2>
+          <div className="space-y-1.5">
+            {topIssues(issues, 5).map((issue) => {
+              const sev = SEVERITY_META[issue.severity]
+              return (
+                <button
+                  key={issue.id}
+                  onClick={() => issue.fix && navigate(issue.fix.route)}
+                  className="flex w-full items-center gap-2.5 rounded-control bg-surface px-3 py-2 text-left text-sm hover:ring-1 hover:ring-orange-200"
+                >
+                  <span className={clsx('h-2 w-2 shrink-0 rounded-full', sev.dot)} />
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink">{issue.title}</span>
+                  <span className="hidden shrink-0 text-xs text-subtle sm:inline">{issue.companyName}</span>
+                  {issue.fix && <ChevronRight size={15} className="shrink-0 text-subtle" />}
+                </button>
+              )
+            })}
+          </div>
+        </section>
       )}
 
       {/* Results */}

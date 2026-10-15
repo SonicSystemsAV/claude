@@ -503,6 +503,13 @@ export function runHealthChecks(): Issue[] {
   })
 }
 
+/** The highest-priority issues to work first (issues are already ranked by
+ *  severity then dollar magnitude). Powers the Review Center "Start here" strip
+ *  and, later, a weekly brief. */
+export function topIssues(issues: Issue[], n = 5): Issue[] {
+  return issues.slice(0, n)
+}
+
 export interface HealthSummary {
   total: number
   high: number
