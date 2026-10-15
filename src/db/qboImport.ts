@@ -143,7 +143,9 @@ function parseJournal(text: string): JTxn[] {
     num: find(['num', 'no.', 'no', 'doc num', '#', 'ref no.', 'ref no']),
     name: find(['name', 'payee', 'vendor', 'customer']),
     desc: find(['memo/description', 'memo', 'description', 'details']),
-    account: find(['account', 'account full name', 'distribution account']),
+    // Prefer the full "Account Name" over a bare "Distribution account number"
+    // code column (some QBO Journal exports include both).
+    account: find(['account name', 'account', 'account full name', 'distribution account name']),
     debit: find(['debit', 'debits']),
     credit: find(['credit', 'credits']),
     amount: find(['amount']),
