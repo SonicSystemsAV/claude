@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import {
   AlertTriangle,
@@ -18,12 +19,16 @@ import {
   Ban,
   Search,
   Trash2,
+  Sparkles,
+  Send,
 } from 'lucide-react'
 import { useStore } from '../state/store'
 import { Money } from '../components/Money'
 import { formatDate } from '../lib/format'
 import { getAccounts } from '../db/repo'
 import { reclassEntry, addCategoryRule, countEntriesOnAccount, loadCategoryRules, applyCategoryRule, deleteCategoryRule } from '../db/categoryRules'
+import { runProposal, describeAction, applyProposedAction, type Proposal } from '../db/assistantActions'
+import { loadAssistantConfig } from '../db/assistant'
 import {
   reviewInterCompanyTransfers,
   needsReview,
@@ -97,6 +102,8 @@ export default function TransferReview() {
   const [page, setPage] = useState(0)
   const [query, setQuery] = useState('')
   const [showRules, setShowRules] = useState(false)
+  const [showAi, setShowAi] = useState(false)
+  const currentCompanyId = useStore((s) => s.currentCompanyId)
 
   const report: Review = useMemo(
     () => reviewInterCompanyTransfers({ startDate: start || undefined, endDate: end || undefined, matchWindowDays: windowDays }),
@@ -180,11 +187,15 @@ export default function TransferReview() {
         <button className="btn-ghost text-sm" onClick={() => setShowRules((s) => !s)}>
           <Ban size={14} /> Ignore rules {report.rules.length ? `(${report.rules.length})` : ''}
         </button>
+        <button className="btn-ghost text-sm" onClick={() => setShowAi((s) => !s)}>
+          <Sparkles size={14} /> Ask AI
+        </button>
         <span className="ml-auto text-xs text-slate-400">
           Confident matches (exact amount, ≤2 days, both sides named) accept in one click.
         </span>
       </div>
 
+      {showAi && <AiPanel companyId={currentCompanyId ?? null} review={report} onChange={refresh} />}
       {showRules && <RulesPanel review={report} onChange={refresh} />}
 
       {/* Balance tie-outs */}
@@ -608,6 +619,105 @@ function MovementRow({ rm, onChange, dense }: { rm: ReviewedMovement; onChange: 
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function AiPanel({ companyId, review, onChange }: { companyId: number | null; review: Review; onChange: () => void }) {
+  const config = useMemo(() => loadAssistantConfig(), [])
+  const companyName = review.companies.find((c) => c.id === companyId)?.name
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [proposal, setProposal] = useState<Proposal | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+  const [results, setResults] = useState<string[]>([])
+
+  async function send() {
+    if (companyId == null) { setError('Pick a company first (top-left company switcher) — the assistant acts on the active company.'); return }
+    setError(null); setResults([]); setProposal(null); setLoading(true)
+    try {
+      const p = await runProposal(companyId, input.trim() || `Suggest how to handle the needs-review items for ${companyName ?? 'this company'}.`, review, config)
+      setProposal(p)
+      setChecked(new Set(p.actions.map((_, i) => i)))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function apply() {
+    if (!proposal) return
+    const out: string[] = []
+    proposal.actions.forEach((a, i) => { if (checked.has(i)) { try { out.push(applyProposedAction(a)) } catch (e) { out.push(`Failed: ${e instanceof Error ? e.message : String(e)}`) } } })
+    setResults(out); setProposal(null); onChange()
+  }
+
+  return (
+    <div className="card space-y-3 p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <Sparkles size={15} className="text-brand-500" /> Ask AI {companyName ? <span className="text-xs font-normal text-slate-400">· acting on {companyName}</span> : null}
+      </div>
+      <div className="flex items-start gap-2">
+        <textarea
+          className="min-h-[2.5rem] flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          rows={2}
+          placeholder={`e.g. "Reclassify all undocumented ATM cash to the shareholder loan", or "how should I handle these?"`}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <button className="btn-primary" disabled={loading} onClick={send}><Send size={14} /> {loading ? 'Thinking…' : 'Send'}</button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          {error} {error.includes('API key') && <Link to="/settings" className="underline">Open Settings</Link>}
+        </div>
+      )}
+
+      {proposal && (
+        <div className="space-y-2">
+          {proposal.message && <p className="text-sm text-slate-700">{proposal.message}</p>}
+          {proposal.actions.length === 0 ? (
+            <p className="text-sm text-slate-400">No actions proposed.</p>
+          ) : (
+            <>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Proposed — review & apply</div>
+              <ul className="space-y-1.5">
+                {proposal.actions.map((a, i) => {
+                  const d = describeAction(a)
+                  return (
+                    <li key={i} className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                      <input type="checkbox" className="mt-1" checked={checked.has(i)} onChange={(e) => {
+                        const next = new Set(checked); if (e.target.checked) next.add(i); else next.delete(i); setChecked(next)
+                      }} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-slate-800">{d.label} <span className="text-xs font-normal text-slate-400">· {d.impact}</span></div>
+                        {a.reason && <div className="text-xs text-slate-500">{a.reason}</div>}
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="flex items-center gap-2">
+                <button className="btn-primary" disabled={checked.size === 0} onClick={apply}>Apply {checked.size} selected</button>
+                <button className="btn-ghost text-sm" onClick={() => setProposal(null)}>Discard</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <ul className="space-y-0.5 text-sm text-emerald-700">
+          {results.map((r, i) => <li key={i} className="flex items-center gap-1.5"><CheckCircle2 size={13} /> {r}</li>)}
+        </ul>
+      )}
+
+      <p className="text-xs text-slate-400">
+        The AI only proposes — nothing changes until you Apply. Every applied action is balanced, written to the audit log, and reversible.
+      </p>
     </div>
   )
 }
