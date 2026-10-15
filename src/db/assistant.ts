@@ -22,6 +22,7 @@ import { isTauri } from '../lib/desktop'
 import { getCompany, trialBalance, companyOverview, getTransactions } from './repo'
 import { getTaxCodes } from './documents'
 import { formatMoney } from '../lib/money'
+import { interCompanyTieOuts, interCompanyLoanAccounts } from './interCompanyReview'
 
 // Default to the current Opus; the user can pick a cheaper model in config.
 export const DEFAULT_ASSISTANT_MODEL = 'claude-opus-5-5'
@@ -122,6 +123,31 @@ export function buildLedgerContext(companyId: number, maxTransactions = 50): str
     const accts = t.entries.map((e) => e.account_name).join(' / ')
     lines.push(`  ${t.date} · ${formatMoney(total, cur)} · ${t.memo ?? ''}${t.contact_name ? ` · ${t.contact_name}` : ''} · [${accts}]`)
   }
+
+  // Group-wide inter-company picture — ALWAYS all companies, so cross-company
+  // questions work regardless of which single company is selected above.
+  const tieOuts = interCompanyTieOuts()
+  const icAccts = interCompanyLoanAccounts()
+  if (tieOuts.length || icAccts.length) {
+    lines.push('')
+    lines.push('===== INTER-COMPANY (ALL companies — independent of the selection above) =====')
+    if (tieOuts.length) {
+      lines.push('TIE-OUTS per pair (the two companies’ books should be equal and opposite; a non-zero DIFF means they DISAGREE and one side is misrecording transfers):')
+      for (const p of tieOuts) {
+        lines.push(
+          `  ${p.aName} ↔ ${p.bName}: ${p.aName} books net ${formatMoney(p.loanPerA, cur)} (+ = ${p.bName} owes ${p.aName}); ` +
+          `${p.bName} books net ${formatMoney(p.loanPerB, cur)} (+ = ${p.aName} owes ${p.bName}); ` +
+          `LOAN DIFF ${formatMoney(p.loanDiff, cur)} ${p.balanced ? '(ties out)' : '*** DOES NOT TIE OUT ***'}`,
+        )
+      }
+    }
+    if (icAccts.length) {
+      lines.push('INTER-COMPANY / LOAN ACCOUNT BALANCES (+ = asset/receivable owed TO this company, − = liability/payable this company owes):')
+      for (const a of icAccts) {
+        lines.push(`  ${a.companyName} · ${a.accountName}${a.otherCompany ? ` (re ${a.otherCompany})` : ''} · ${formatMoney(a.balanceCents, cur)}`)
+      }
+    }
+  }
   return lines.join('\n')
 }
 
@@ -132,7 +158,9 @@ const SYSTEM_PROMPT = [
   '- The LEDGER CONTEXT is the only source of truth. If the answer is not derivable from it, say so plainly — never invent figures, accounts, dates, or transactions.',
   '- Money is in the company\'s base currency; quote amounts as shown.',
   '- This is double-entry: every transaction\'s debits equal its credits. Reference accounts by their code and name.',
-  '- You are read-only. You cannot post, edit, or delete anything; if asked to, explain how the user would do it in the app instead.',
+  '- The detailed single-company ledger (trial balance + recent transactions) is for the ONE selected company. The INTER-COMPANY section covers ALL companies and does NOT change when the user switches the company selector — use it for any cross-company / transfer comparison.',
+  '- For "which company isn\'t recording transfers correctly between the two", read the pair\'s LOAN DIFF: if it is non-zero the two books disagree; identify the likely wrong side from the inter-company account balances (e.g. one side missing the mirror entry, or booking revenue/equity instead of a loan).',
+  '- You are read-only. You cannot post, edit, or delete anything; if asked to, explain how the user would do it in the app (or via the Transfer Review "Ask AI" panel, which can propose and apply changes).',
   '- Be concise and show the numbers you used.',
 ].join('\n')
 

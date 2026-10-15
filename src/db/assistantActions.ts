@@ -72,6 +72,13 @@ export function buildProposalContext(companyId: number, review: TransferReview):
     lines.push('')
     lines.push('RECURRING RECIPIENTS: ' + review.recipients.slice(0, 20).map((r) => `${r.name} (${r.count}×)`).join(', '))
   }
+  if (review.pairs.length) {
+    lines.push('')
+    lines.push('INTER-COMPANY TIE-OUTS (all companies; LOAN DIFF should be 0 — non-zero means the two books disagree):')
+    for (const p of review.pairs) {
+      lines.push(`  ${p.aName} ↔ ${p.bName}: ${p.aName} ${formatMoney(p.loanPerA, cur)} / ${p.bName} ${formatMoney(p.loanPerB, cur)} · DIFF ${formatMoney(p.loanDiff, cur)}${p.balanced ? '' : ' ***OFF***'}`)
+    }
+  }
   return lines.join('\n')
 }
 

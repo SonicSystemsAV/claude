@@ -626,6 +626,71 @@ function subledgerBalance(companyId: number, otherTokens: string[], want: 'AP' |
   return sum
 }
 
+/**
+ * Cross-company balance-sheet tie-outs (loan + vendor/customer) for every pair.
+ * Deterministic and cheap (no movement gathering), so it's safe to feed the AI
+ * assistant for "which company isn't representing transfers correctly" questions.
+ */
+export function interCompanyTieOuts(companies?: { id: number; name: string }[]): PairTieOut[] {
+  const cos = companies ?? all<{ id: number; name: string }>('SELECT id, name FROM companies ORDER BY name')
+  const distinct = distinctiveTokens(cos)
+  const pairs: PairTieOut[] = []
+  for (let i = 0; i < cos.length; i++) {
+    for (let j = i + 1; j < cos.length; j++) {
+      const a = cos[i]
+      const b = cos[j]
+      const aTok = distinct.get(a.id) ?? []
+      const bTok = distinct.get(b.id) ?? []
+      const loanPerA = loanPositionToward(a.id, bTok) // + = B owes A
+      const loanPerB = loanPositionToward(b.id, aTok) // + = A owes B
+      const apFromA = subledgerBalance(a.id, bTok, 'AP')
+      const arFromB = subledgerBalance(b.id, aTok, 'AR')
+      const loanDiff = loanPerA + loanPerB
+      const tradeDiff = apFromA - arFromB
+      const balanced = Math.abs(loanDiff) < 1 && Math.abs(tradeDiff) < 1
+      if (loanPerA || loanPerB || apFromA || arFromB) {
+        pairs.push({ aId: a.id, aName: a.name, bId: b.id, bName: b.name, loanPerA, loanPerB, loanDiff, apFromA, arFromB, tradeDiff, balanced })
+      }
+    }
+  }
+  return pairs
+}
+
+/** Per-company inter-company / loan / due-to-from accounts that name another
+ *  group company, with their display balances. Lets the AI see both raw sides. */
+export interface InterCoAccountBalance {
+  companyId: number
+  companyName: string
+  accountName: string
+  /** The other group company this account references, if identifiable. */
+  otherCompany: string | null
+  /** Display balance in cents: + = asset/receivable (owed to this company),
+   *  − = liability/payable (this company owes). */
+  balanceCents: number
+}
+
+export function interCompanyLoanAccounts(companies?: { id: number; name: string }[]): InterCoAccountBalance[] {
+  const cos = companies ?? all<{ id: number; name: string }>('SELECT id, name FROM companies ORDER BY name')
+  const distinct = distinctiveTokens(cos)
+  const out: InterCoAccountBalance[] = []
+  for (const c of cos) {
+    const accts = all<{ id: number; name: string; type: string }>('SELECT id, name, type FROM accounts WHERE company_id = ? AND archived = 0', [c.id])
+    for (const a of accts) {
+      if (!isTransferAccount(a.name)) continue
+      const raw = accountBalanceCents(a.id) // debit-positive
+      if (raw === 0) continue
+      const words = new Set(tokenize(a.name))
+      let other: string | null = null
+      for (const o of cos) {
+        if (o.id === c.id) continue
+        if ((distinct.get(o.id) ?? []).some((t) => words.has(t))) { other = o.name; break }
+      }
+      out.push({ companyId: c.id, companyName: c.name, accountName: a.name, otherCompany: other, balanceCents: raw })
+    }
+  }
+  return out
+}
+
 export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferReview {
   const windowDays = opts.matchWindowDays ?? 7
   const recipientMinCount = opts.recipientMinCount ?? 2
@@ -756,29 +821,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   })
 
   // Balance-sheet tie-outs per company pair.
-  const pairs: PairTieOut[] = []
-  for (let i = 0; i < companies.length; i++) {
-    for (let j = i + 1; j < companies.length; j++) {
-      const a = companies[i]
-      const b = companies[j]
-      const aTok = distinct.get(a.id) ?? []
-      const bTok = distinct.get(b.id) ?? []
-      const loanPerA = loanPositionToward(a.id, bTok) // + = B owes A
-      const loanPerB = loanPositionToward(b.id, aTok) // + = A owes B
-      const apFromA = subledgerBalance(a.id, bTok, 'AP') // A owes B (trade)
-      const arFromB = subledgerBalance(b.id, aTok, 'AR') // B expects from A (trade)
-      const loanDiff = loanPerA + loanPerB // should be ~0 when the books agree
-      const tradeDiff = apFromA - arFromB
-      const balanced = Math.abs(loanDiff) < 1 && Math.abs(tradeDiff) < 1
-      // Only report a pair that actually has inter-company activity.
-      if (loanPerA || loanPerB || apFromA || arFromB) {
-        pairs.push({
-          aId: a.id, aName: a.name, bId: b.id, bName: b.name,
-          loanPerA, loanPerB, loanDiff, apFromA, arFromB, tradeDiff, balanced,
-        })
-      }
-    }
-  }
+  const pairs = interCompanyTieOuts(companies)
   const unbalancedPairs = pairs.filter((p) => !p.balanced).length
   // Surface an unbalanced pair on each internal movement touching that pair.
   if (unbalancedPairs) {
