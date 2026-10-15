@@ -22,6 +22,8 @@ import {
 import { useStore } from '../state/store'
 import { Money } from '../components/Money'
 import { formatDate } from '../lib/format'
+import { getAccounts } from '../db/repo'
+import { reclassEntry, addCategoryRule, countEntriesOnAccount, loadCategoryRules, applyCategoryRule, deleteCategoryRule } from '../db/categoryRules'
 import {
   reviewInterCompanyTransfers,
   needsReview,
@@ -38,6 +40,7 @@ import {
   type TransferFlag,
   type MovementKind,
   type MatchCandidate,
+  type MovementLeg,
 } from '../db/interCompanyReview'
 
 const KIND_LABEL: Record<MovementKind, string> = {
@@ -410,30 +413,56 @@ function BalanceTieOuts({ pairs }: { pairs: Review['pairs'] }) {
 }
 
 function RulesPanel({ review, onChange }: { review: Review; onChange: () => void }) {
+  const catRules = useMemo(() => loadCategoryRules(), [review])
   return (
-    <div className="card p-4">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
-        <Ban size={15} className="text-slate-400" /> Standing ignore rules
+    <div className="card space-y-4 p-4">
+      <div>
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <Ban size={15} className="text-slate-400" /> Standing ignore rules
+        </div>
+        {review.rules.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            None yet. Use <strong>Always ignore</strong> on a group to stop an account or recipient from being flagged — it survives re-imports.
+          </p>
+        ) : (
+          <ul className="space-y-1 text-sm">
+            {review.rules.map((r) => (
+              <li key={r.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-1.5">
+                <span className="text-slate-700">
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">{r.scope}</span>{' '}
+                  ignore “{r.match_text}”
+                </span>
+                <button className="btn-ghost text-xs text-rose-600" onClick={() => { deleteRule(r.id); onChange() }}>
+                  <Trash2 size={13} /> Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {review.rules.length === 0 ? (
-        <p className="text-sm text-slate-400">
-          No rules yet. Use <strong>Always ignore</strong> on a group to stop an account or recipient from being flagged — it survives re-imports.
-        </p>
-      ) : (
-        <ul className="space-y-1 text-sm">
-          {review.rules.map((r) => (
-            <li key={r.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-1.5">
-              <span className="text-slate-700">
-                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">{r.scope}</span>{' '}
-                ignore “{r.match_text}”
-              </span>
-              <button className="btn-ghost text-xs text-rose-600" onClick={() => { deleteRule(r.id); onChange() }}>
-                <Trash2 size={13} /> Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+
+      <div>
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <ArrowLeftRight size={15} className="text-slate-400" /> Reclassify rules
+        </div>
+        {catRules.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            None yet. Use <strong>recategorize → All like this + remember</strong> on a transaction to move everything from one account to another and keep it applied.
+          </p>
+        ) : (
+          <ul className="space-y-1 text-sm">
+            {catRules.map((r) => (
+              <li key={r.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-1.5">
+                <span className="text-slate-700">{r.from_name} → {r.to_name}{r.source === 'ai' ? <span className="ml-1 rounded bg-emerald-50 px-1 text-xs text-emerald-600">AI</span> : null}</span>
+                <span className="flex items-center gap-2">
+                  <button className="btn-ghost text-xs" title="Re-apply to any new matching entries" onClick={() => { applyCategoryRule(r); onChange() }}>Apply again</button>
+                  <button className="btn-ghost text-xs text-rose-600" onClick={() => { deleteCategoryRule(r.id); onChange() }}><Trash2 size={13} /> Remove</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }
@@ -517,6 +546,14 @@ function MovementRow({ rm, onChange, dense }: { rm: ReviewedMovement; onChange: 
             {m.memo && <div className="mt-1 text-xs text-slate-500">Memo: {m.memo}</div>}
           </div>
 
+          {!selfTransfer && m.otherLegs.length === 1 && (
+            <Recategorize
+              companyId={m.companyId}
+              leg={m.otherLegs[0]}
+              onChange={onChange}
+            />
+          )}
+
           {ruled && (
             <div className="mb-3 text-xs text-slate-500">Auto-ignored by rule: “{ruled.match_text}” ({ruled.scope}).</div>
           )}
@@ -571,6 +608,36 @@ function MovementRow({ rm, onChange, dense }: { rm: ReviewedMovement; onChange: 
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function Recategorize({ companyId, leg, onChange }: { companyId: number; leg: MovementLeg; onChange: () => void }) {
+  const [target, setTarget] = useState<number | ''>('')
+  const accounts = useMemo(() => getAccounts(companyId).filter((a) => a.id !== leg.accountId), [companyId, leg.accountId])
+  const matchCount = useMemo(() => countEntriesOnAccount(leg.accountId), [leg.accountId])
+
+  return (
+    <div className="mb-3 rounded-lg border border-slate-200 bg-white p-2">
+      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Recategorize</div>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-slate-500">{leg.accountCode} {leg.accountName} →</span>
+        <select className="rounded-md border border-slate-300 px-2 py-1 text-sm" value={target} onChange={(e) => setTarget(e.target.value === '' ? '' : Number(e.target.value))}>
+          <option value="">Choose account…</option>
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name}</option>)}
+        </select>
+        <button className="btn-ghost text-xs" disabled={target === ''} onClick={() => { reclassEntry(leg.entryId, Number(target)); onChange() }}>
+          This one
+        </button>
+        <button
+          className="btn-ghost text-xs"
+          disabled={target === ''}
+          title={`Move all ${matchCount} entries coded to "${leg.accountName}" and remember the rule`}
+          onClick={() => { addCategoryRule(leg.accountId, Number(target)); onChange() }}
+        >
+          All {matchCount} like this + remember
+        </button>
+      </div>
     </div>
   )
 }

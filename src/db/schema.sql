@@ -261,6 +261,24 @@ CREATE TABLE IF NOT EXISTS interco_rules (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Reclassification rules: "move entries coded to account A over to account B"
+-- within one company. A pure reclass — it only changes which account an entry
+-- hits, never the amount, so every transaction stays balanced. Applying a rule
+-- re-codes all matching entries now (backward); it can be re-run after new
+-- imports (forward). Every run is written to the audit log and is reversible
+-- (swap the two accounts to undo). Used by the review's "recategorize &
+-- remember" and, later, by the AI assistant's approved proposals.
+CREATE TABLE IF NOT EXISTS category_rules (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id      INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  from_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  to_account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  source          TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user','ai')),
+  note            TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (company_id, from_account_id, to_account_id)
+);
+
 -- Local user accounts with roles (admin / accountant / viewer).
 CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

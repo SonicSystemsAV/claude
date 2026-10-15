@@ -49,6 +49,7 @@ export type MovementKind =
   | 'other' // a leg we could not confidently bucket
 
 export interface MovementLeg {
+  entryId: number
   accountId: number
   accountName: string
   accountCode: string
@@ -272,6 +273,7 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
   const movements: BankMovement[] = []
   for (const r of rows) {
     const legs = all<{
+      entry_id: number
       account_id: number
       name: string
       code: string
@@ -279,7 +281,7 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
       is_bank: number
       amount_cents: number
     }>(
-      `SELECT e.account_id, a.name, a.code, a.type, a.is_bank, e.amount_cents
+      `SELECT e.id AS entry_id, e.account_id, a.name, a.code, a.type, a.is_bank, e.amount_cents
          FROM entries e JOIN accounts a ON a.id = e.account_id
         WHERE e.transaction_id = ?`,
       [r.txn_id],
@@ -334,6 +336,7 @@ export function gatherBankMovements(opts: ReviewOptions = {}): BankMovement[] {
       signedCents,
       direction: signedCents > 0 ? 'in' : 'out',
       otherLegs: otherLegs.map((l) => ({
+        entryId: l.entry_id,
         accountId: l.account_id,
         accountName: l.name,
         accountCode: l.code,
