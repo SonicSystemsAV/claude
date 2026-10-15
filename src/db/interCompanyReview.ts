@@ -28,7 +28,7 @@
  * The engine only reads the ledger; user decisions persist in interco_reviews.
  */
 
-import { all, one, run, tx } from './db'
+import { all, one, run, tx, insert } from './db'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -118,9 +118,23 @@ export interface ReviewedMovement {
   candidates: MatchCandidate[]
   /** The user-confirmed counterparty txn, if any (from interco_reviews). */
   confirmed: InterCoReview | null
+  /** A standing rule that auto-resolved this movement, if any. */
+  ruled: InterCoRule | null
   flags: TransferFlag[]
   /** Short human-readable notes for each flag. */
   notes: string[]
+  /** True when the best candidate is a confident auto-match (one click to accept all). */
+  autoMatch: boolean
+}
+
+export interface InterCoRule {
+  id: number
+  scope: 'account' | 'recipient'
+  company_id: number | null
+  match_text: string
+  action: 'ignore'
+  note: string | null
+  created_at: string
 }
 
 export interface InterCoReview {
@@ -168,6 +182,7 @@ export interface TransferReview {
   pairs: PairTieOut[]
   recipients: RecipientSummary[]
   companies: { id: number; name: string }[]
+  rules: InterCoRule[]
   counts: {
     total: number
     internal: number
@@ -175,6 +190,10 @@ export interface TransferReview {
     typeDisagreements: number
     vague: number
     unbalancedPairs: number
+    /** Open items still needing a decision (flagged, not resolved, not ruled out). */
+    needsReview: number
+    /** Of those, how many have a confident one-click auto-match available. */
+    autoMatchable: number
   }
 }
 
@@ -626,6 +645,21 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   const reviewByTxn = new Map<string, InterCoReview>()
   for (const r of reviews) reviewByTxn.set(`${r.company_id}:${r.txn_id}`, r)
 
+  const rules = loadRules()
+  const ruleFor = (m: BankMovement): InterCoRule | null => {
+    for (const r of rules) {
+      if (r.company_id != null && r.company_id !== m.companyId) continue
+      if (r.scope === 'recipient') {
+        if (m.contactName && m.contactName.trim().toLowerCase() === r.match_text) return r
+      } else {
+        const t = r.match_text
+        if ((m.primaryAccountName ?? '').toLowerCase() === t) return r
+        if (m.otherLegs.some((l) => l.accountName.toLowerCase() === t)) return r
+      }
+    }
+    return null
+  }
+
   // Pre-split by direction for matching (self-transfers are never a counter-side).
   const byDirection = { in: [] as BankMovement[], out: [] as BankMovement[] }
   for (const m of movements) if (!m.selfTransfer) byDirection[m.direction].push(m)
@@ -633,6 +667,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   const reviewed: ReviewedMovement[] = movements.map((m) => {
     const counterparty = identifyCounterparty(m, companies, distinct, recipientMinCount, recipientCounts)
     const confirmed = reviewByTxn.get(`${m.companyId}:${m.txnId}`) ?? null
+    const ruled = confirmed ? null : ruleFor(m)
 
     const flags: TransferFlag[] = []
     const notes: string[] = []
@@ -640,7 +675,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
     // A self-contained transfer between the company's own cash accounts is
     // already balanced — show it, but it needs no matching or flags.
     if (m.selfTransfer) {
-      return { movement: m, counterparty, candidates: [], confirmed, flags, notes }
+      return { movement: m, counterparty, candidates: [], confirmed, ruled, flags, notes, autoMatch: false }
     }
 
     // Look for the other side when this looks like a transfer: it names another
@@ -675,12 +710,13 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
         .slice(0, 6)
     }
 
-    if (m.kind === 'vague') {
+    if (!ruled && m.kind === 'vague') {
       flags.push('vague_account')
       notes.push(`Coded to "${m.primaryAccountName ?? 'no account'}" — needs a real category.`)
     }
 
-    if (shouldSearch && confirmed?.resolution !== 'external' && confirmed?.resolution !== 'ignored') {
+    let autoMatch = false
+    if (!ruled && shouldSearch && confirmed?.resolution !== 'external' && confirmed?.resolution !== 'ignored') {
       const best = candidates[0]
       const chosen =
         confirmed?.resolution === 'matched' && confirmed.matched_txn_id != null
@@ -702,10 +738,18 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
           flags.push('type_disagreement')
           notes.push(`One side booked this as "${outK}", the other as "${inK}" — the books won't tie out.`)
         }
+        // Confident, unique, mutually-named best match on the OUT side can be
+        // accepted in bulk (dedup: match each pair from its out leg only).
+        if (!confirmed && m.direction === 'out') {
+          const second = candidates[1]
+          const unique = !second || best.score - second.score >= 25
+          const named = best.reasons.some((r) => r.includes('reference'))
+          autoMatch = best.sameAmount && best.dayGap <= 2 && named && unique
+        }
       }
     }
 
-    return { movement: m, counterparty, candidates, confirmed, flags, notes }
+    return { movement: m, counterparty, candidates, confirmed, ruled, flags, notes, autoMatch }
   })
 
   // Balance-sheet tie-outs per company pair.
@@ -737,6 +781,7 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   if (unbalancedPairs) {
     const bad = new Set(pairs.filter((p) => !p.balanced).flatMap((p) => [`${p.aId}:${p.bId}`, `${p.bId}:${p.aId}`]))
     for (const rm of reviewed) {
+      if (rm.ruled || rm.confirmed) continue
       if (rm.counterparty.type !== 'internal') continue
       if (bad.has(`${rm.movement.companyId}:${rm.counterparty.companyId}`)) {
         if (!rm.flags.includes('unbalanced_pair')) {
@@ -748,12 +793,14 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
   }
 
   const recipients: RecipientSummary[] = buildRecipients(movements, recipientMinCount)
+  const isOpen = (r: ReviewedMovement) => r.flags.length > 0 && !r.confirmed && !r.ruled
 
   return {
     movements: reviewed,
     pairs,
     recipients,
     companies,
+    rules,
     counts: {
       total: reviewed.length,
       internal: reviewed.filter((r) => r.counterparty.type === 'internal').length,
@@ -761,8 +808,15 @@ export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferR
       typeDisagreements: reviewed.filter((r) => r.flags.includes('type_disagreement')).length,
       vague: reviewed.filter((r) => r.flags.includes('vague_account')).length,
       unbalancedPairs,
+      needsReview: reviewed.filter(isOpen).length,
+      autoMatchable: reviewed.filter((r) => r.autoMatch).length,
     },
   }
+}
+
+/** Export the `isOpen` predicate shape the UI uses for "needs review". */
+export function needsReview(r: ReviewedMovement): boolean {
+  return r.flags.length > 0 && !r.confirmed && !r.ruled
 }
 
 function buildRecipients(movements: BankMovement[], minCount: number): RecipientSummary[] {
@@ -836,4 +890,64 @@ function upsertReview(r: Omit<InterCoReview, 'id' | 'created_at'>): void {
        note = excluded.note`,
     [r.company_id, r.txn_id, r.matched_company_id, r.matched_txn_id, r.resolution, r.recipient, r.note],
   )
+}
+
+// ---------------------------------------------------------------------------
+// Bulk operations
+// ---------------------------------------------------------------------------
+
+/** Confirm every auto-matchable pair in one transaction. Returns how many. */
+export function acceptAutoMatches(review: TransferReview): number {
+  const pairs = review.movements.filter((r) => r.autoMatch && r.candidates[0])
+  if (pairs.length === 0) return 0
+  tx(() => {
+    for (const rm of pairs) {
+      const c = rm.candidates[0]
+      upsertReview({ company_id: rm.movement.companyId, txn_id: rm.movement.txnId, matched_company_id: c.movement.companyId, matched_txn_id: c.movement.txnId, resolution: 'matched', recipient: null, note: 'auto-matched' })
+      upsertReview({ company_id: c.movement.companyId, txn_id: c.movement.txnId, matched_company_id: rm.movement.companyId, matched_txn_id: rm.movement.txnId, resolution: 'matched', recipient: null, note: 'auto-matched' })
+    }
+  })
+  return pairs.length
+}
+
+/** Mark a batch of movements ignored in one transaction. */
+export function ignoreBatch(items: { companyId: number; txnId: number }[], note?: string): void {
+  if (items.length === 0) return
+  tx(() => {
+    for (const it of items) {
+      upsertReview({ company_id: it.companyId, txn_id: it.txnId, matched_company_id: null, matched_txn_id: null, resolution: 'ignored', recipient: null, note: note ?? null })
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Standing rules
+// ---------------------------------------------------------------------------
+
+export function loadRules(): InterCoRule[] {
+  return all<InterCoRule>('SELECT * FROM interco_rules ORDER BY scope, match_text')
+}
+
+/** Add an ignore rule. match_text is stored lower-cased for matching. */
+export function addRule(scope: 'account' | 'recipient', matchText: string, companyId?: number | null, note?: string): number {
+  const text = matchText.trim().toLowerCase()
+  if (!text) return 0
+  // Avoid duplicates.
+  const existing = one<{ id: number }>(
+    'SELECT id FROM interco_rules WHERE scope = ? AND match_text = ? AND IFNULL(company_id,-1) = IFNULL(?,-1)',
+    [scope, text, companyId ?? null],
+  )
+  if (existing) return existing.id
+  let id = 0
+  tx(() => {
+    id = insert(
+      'INSERT INTO interco_rules (scope, company_id, match_text, action, note) VALUES (?, ?, ?, ?, ?)',
+      [scope, companyId ?? null, text, 'ignore', note ?? null],
+    )
+  })
+  return id
+}
+
+export function deleteRule(id: number): void {
+  tx(() => run('DELETE FROM interco_rules WHERE id = ?', [id]))
 }

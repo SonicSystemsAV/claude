@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { clsx } from 'clsx'
 import {
   AlertTriangle,
@@ -12,16 +12,28 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  Zap,
+  Layers,
+  List as ListIcon,
+  Ban,
+  Search,
+  Trash2,
 } from 'lucide-react'
 import { useStore } from '../state/store'
 import { Money } from '../components/Money'
 import { formatDate } from '../lib/format'
 import {
   reviewInterCompanyTransfers,
+  needsReview,
+  acceptAutoMatches,
+  ignoreBatch,
+  addRule,
+  deleteRule,
   confirmMatch,
   markExternal,
   markIgnored,
   clearReview,
+  type TransferReview as Review,
   type ReviewedMovement,
   type TransferFlag,
   type MovementKind,
@@ -37,7 +49,7 @@ const KIND_LABEL: Record<MovementKind, string> = {
   transfer_in: 'Transfer in (loan / due-to)',
   debt_payment: 'Loan / mortgage / tax payment',
   equity: 'Owner / shareholder equity',
-  bank_transfer: 'Between own bank accounts',
+  bank_transfer: 'Between own accounts',
   vague: 'Uncategorized',
   other: 'Other',
 }
@@ -52,7 +64,23 @@ const FLAG_LABEL: Record<TransferFlag, string> = {
   unbalanced_pair: 'Pair out of balance',
 }
 
-type FilterMode = 'flagged' | 'internal' | 'recipients' | 'all'
+type FilterMode = 'needs' | 'internal' | 'recipients' | 'all'
+const FLAT_PAGE = 50
+const GROUP_PAGE = 20
+
+function keyOf(rm: ReviewedMovement) {
+  return `${rm.movement.companyId}:${rm.movement.txnId}`
+}
+
+/** Bucket a movement for the grouped view, with the rule it would create. */
+function groupInfo(rm: ReviewedMovement): { key: string; label: string; rule: { scope: 'account' | 'recipient'; text: string } | null } {
+  if (rm.counterparty.type === 'internal')
+    return { key: `co:${rm.counterparty.companyId}`, label: `↔ ${rm.counterparty.companyName}`, rule: null }
+  if (rm.counterparty.type === 'recipient')
+    return { key: `rc:${rm.counterparty.name.toLowerCase()}`, label: rm.counterparty.name, rule: { scope: 'recipient', text: rm.counterparty.name } }
+  const acct = rm.movement.primaryAccountName || rm.movement.bankAccountName
+  return { key: `ac:${acct.toLowerCase()}`, label: acct, rule: { scope: 'account', text: acct } }
+}
 
 export default function TransferReview() {
   const rev = useStore((s) => s.rev)
@@ -61,37 +89,46 @@ export default function TransferReview() {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [windowDays, setWindowDays] = useState(5)
-  const [filter, setFilter] = useState<FilterMode>('flagged')
+  const [filter, setFilter] = useState<FilterMode>('needs')
+  const [grouped, setGrouped] = useState(true)
+  const [page, setPage] = useState(0)
+  const [query, setQuery] = useState('')
+  const [showRules, setShowRules] = useState(false)
 
-  const report = useMemo(
-    () =>
-      reviewInterCompanyTransfers({
-        startDate: start || undefined,
-        endDate: end || undefined,
-        matchWindowDays: windowDays,
-      }),
+  const report: Review = useMemo(
+    () => reviewInterCompanyTransfers({ startDate: start || undefined, endDate: end || undefined, matchWindowDays: windowDays }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [start, end, windowDays, bump, rev],
   )
   const refresh = () => setBump((b) => b + 1)
+  useEffect(() => setPage(0), [filter, grouped, query, start, end, windowDays])
 
+  const q = query.trim().toLowerCase()
   const shown = report.movements.filter((m) => {
-    if (filter === 'all') return true
-    if (filter === 'flagged') return m.flags.length > 0 && m.confirmed?.resolution !== 'ignored'
-    if (filter === 'internal') return m.counterparty.type === 'internal' || m.movement.selfTransfer === true || m.candidates.length > 0
-    if (filter === 'recipients') return m.counterparty.type === 'recipient'
+    if (filter === 'needs' && !needsReview(m)) return false
+    if (filter === 'internal' && !(m.counterparty.type === 'internal' || m.movement.selfTransfer || m.candidates.length > 0)) return false
+    if (filter === 'recipients' && m.counterparty.type !== 'recipient') return false
+    if (q) {
+      const blob = [m.movement.companyName, m.movement.contactName, m.movement.memo, m.movement.bankAccountName, m.movement.primaryAccountName, ...m.movement.otherLegs.map((l) => l.accountName)]
+        .filter(Boolean).join(' ').toLowerCase()
+      if (!blob.includes(q)) return false
+    }
     return true
   })
 
   const c = report.counts
+
+  function acceptAuto() {
+    const n = acceptAutoMatches(report)
+    if (n) refresh()
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 p-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Transfer review</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Every bank movement between your companies and out to recurring recipients, with each side’s category,
-          a best-guess match (pick from candidates when several fit), and flags where things don’t tie out.
+          Money between your companies and out to recurring recipients — matched, categorized, and flagged where it doesn’t tie out.
         </p>
       </div>
 
@@ -113,19 +150,39 @@ export default function TransferReview() {
             <option value={7}>7 days</option>
           </select>
         </label>
-        {(start || end) && (
-          <button className="btn-ghost text-sm" onClick={() => { setStart(''); setEnd('') }}>Clear dates</button>
-        )}
+        <label className="text-sm flex-1 min-w-[180px]">
+          <span className="mb-1 block text-xs font-medium text-slate-500">Search</span>
+          <div className="flex items-center gap-1.5 rounded-md border border-slate-300 px-2 py-1.5">
+            <Search size={14} className="text-slate-400" />
+            <input className="w-full outline-none" placeholder="account, company, memo…" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+        </label>
+        {(start || end) && <button className="btn-ghost text-sm" onClick={() => { setStart(''); setEnd('') }}>Clear dates</button>}
       </div>
 
       {/* Summary */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <Stat label="Needs review" value={c.needsReview} tone={c.needsReview ? 'warn' : 'ok'} />
         <Stat label="Movements" value={c.total} />
         <Stat label="Inter-company" value={c.internal} icon={<Link2 size={15} className="text-slate-400" />} />
-        <Stat label="Unmatched" value={c.unmatched} tone={c.unmatched ? 'warn' : 'ok'} />
         <Stat label="Type conflicts" value={c.typeDisagreements} tone={c.typeDisagreements ? 'warn' : 'ok'} />
         <Stat label="Vague coding" value={c.vague} tone={c.vague ? 'warn' : 'ok'} />
       </div>
+
+      {/* Bulk helpers */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn-primary" disabled={!c.autoMatchable} onClick={acceptAuto}>
+          <Zap size={15} /> Accept {c.autoMatchable} auto-match{c.autoMatchable === 1 ? '' : 'es'}
+        </button>
+        <button className="btn-ghost text-sm" onClick={() => setShowRules((s) => !s)}>
+          <Ban size={14} /> Ignore rules {report.rules.length ? `(${report.rules.length})` : ''}
+        </button>
+        <span className="ml-auto text-xs text-slate-400">
+          Confident matches (exact amount, ≤2 days, both sides named) accept in one click.
+        </span>
+      </div>
+
+      {showRules && <RulesPanel review={report} onChange={refresh} />}
 
       {/* Balance tie-outs */}
       <BalanceTieOuts pairs={report.pairs} />
@@ -137,7 +194,7 @@ export default function TransferReview() {
             <Users size={15} className="text-slate-400" /> Recurring recipients
           </div>
           <div className="flex flex-wrap gap-2">
-            {report.recipients.map((r) => (
+            {report.recipients.slice(0, 40).map((r) => (
               <div key={r.name} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm">
                 <span className="font-medium text-slate-800">{r.name}</span>
                 <span className="ml-2 text-slate-500">{r.count}× · <Money cents={r.totalOutCents} /></span>
@@ -147,10 +204,10 @@ export default function TransferReview() {
         </div>
       )}
 
-      {/* Filter tabs */}
-      <div className="flex items-center gap-1">
+      {/* Filter tabs + view toggle */}
+      <div className="flex flex-wrap items-center gap-1">
         {([
-          ['flagged', `Needs review${report.movements.filter((m) => m.flags.length && m.confirmed?.resolution !== 'ignored').length ? ` (${report.movements.filter((m) => m.flags.length && m.confirmed?.resolution !== 'ignored').length})` : ''}`],
+          ['needs', `Needs review${c.needsReview ? ` (${c.needsReview})` : ''}`],
           ['internal', 'Inter-company'],
           ['recipients', 'Recipients'],
           ['all', 'All movements'],
@@ -159,19 +216,24 @@ export default function TransferReview() {
             {label}
           </button>
         ))}
+        <div className="ml-auto flex items-center gap-1">
+          <span className="text-xs text-slate-400">{shown.length} shown</span>
+          <button onClick={() => setGrouped((g) => !g)} className="btn-ghost text-sm" title={grouped ? 'Flat list' : 'Group by account/company'}>
+            {grouped ? <><ListIcon size={14} /> Flat</> : <><Layers size={14} /> Group</>}
+          </button>
+        </div>
       </div>
 
-      {/* Movement list */}
-      <div className="space-y-2">
-        {shown.length === 0 && (
-          <div className="card p-8 text-center text-sm text-slate-400">
-            {filter === 'flagged' ? 'Nothing needs review in this range. 🎉' : 'No movements in this range.'}
-          </div>
-        )}
-        {shown.map((m) => (
-          <MovementRow key={`${m.movement.companyId}:${m.movement.txnId}`} rm={m} onChange={refresh} />
-        ))}
-      </div>
+      {/* List */}
+      {shown.length === 0 ? (
+        <div className="card p-8 text-center text-sm text-slate-400">
+          {filter === 'needs' ? 'Nothing needs review in this range. 🎉' : 'No movements match.'}
+        </div>
+      ) : grouped ? (
+        <GroupedList shown={shown} page={page} setPage={setPage} onChange={refresh} />
+      ) : (
+        <FlatList shown={shown} page={page} setPage={setPage} onChange={refresh} />
+      )}
     </div>
   )
 }
@@ -180,12 +242,131 @@ function Stat({ label, value, tone, icon }: { label: string; value: number; tone
   return (
     <div className="card px-4 py-3">
       <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-slate-400">{icon}{label}</div>
-      <div className={clsx('mt-0.5 text-xl font-semibold', tone === 'warn' ? 'text-amber-600' : tone === 'ok' ? 'text-emerald-600' : 'text-slate-800')}>{value}</div>
+      <div className={clsx('mt-0.5 text-xl font-semibold', tone === 'warn' ? 'text-amber-600' : tone === 'ok' ? 'text-emerald-600' : 'text-slate-800')}>{value.toLocaleString()}</div>
     </div>
   )
 }
 
-function BalanceTieOuts({ pairs }: { pairs: ReturnType<typeof reviewInterCompanyTransfers>['pairs'] }) {
+/** Left/right arrow keys flip pages, unless the user is typing in a field. */
+function usePageKeys(page: number, pages: number, setPage: (n: number) => void) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = e.target as HTMLElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA')) return
+      if (e.key === 'ArrowLeft' && page > 0) setPage(page - 1)
+      else if (e.key === 'ArrowRight' && page < pages - 1) setPage(page + 1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [page, pages, setPage])
+}
+
+function Pager({ page, pages, setPage }: { page: number; pages: number; setPage: (n: number) => void }) {
+  if (pages <= 1) return null
+  return (
+    <div className="flex items-center justify-center gap-2 py-2 text-sm">
+      <button className="btn-ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>← Prev</button>
+      <span className="text-slate-500">Page {page + 1} of {pages}</span>
+      <button className="btn-ghost" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>Next →</button>
+    </div>
+  )
+}
+
+function FlatList({ shown, page, setPage, onChange }: { shown: ReviewedMovement[]; page: number; setPage: (n: number) => void; onChange: () => void }) {
+  const pages = Math.ceil(shown.length / FLAT_PAGE)
+  usePageKeys(page, pages, setPage)
+  const slice = shown.slice(page * FLAT_PAGE, page * FLAT_PAGE + FLAT_PAGE)
+  return (
+    <div className="space-y-2">
+      <Pager page={page} pages={pages} setPage={setPage} />
+      {slice.map((m) => (
+        <MovementRow key={keyOf(m)} rm={m} onChange={onChange} />
+      ))}
+      <Pager page={page} pages={pages} setPage={setPage} />
+    </div>
+  )
+}
+
+function GroupedList({ shown, page, setPage, onChange }: { shown: ReviewedMovement[]; page: number; setPage: (n: number) => void; onChange: () => void }) {
+  const groups = useMemo(() => {
+    const map = new Map<string, { label: string; rule: ReturnType<typeof groupInfo>['rule']; items: ReviewedMovement[]; total: number }>()
+    for (const m of shown) {
+      const gi = groupInfo(m)
+      const g = map.get(gi.key) ?? { label: gi.label, rule: gi.rule, items: [], total: 0 }
+      g.items.push(m)
+      g.total += Math.abs(m.movement.signedCents)
+      map.set(gi.key, g)
+    }
+    return [...map.values()].sort((a, b) => b.items.length - a.items.length)
+  }, [shown])
+
+  const pages = Math.ceil(groups.length / GROUP_PAGE)
+  usePageKeys(page, pages, setPage)
+  const slice = groups.slice(page * GROUP_PAGE, page * GROUP_PAGE + GROUP_PAGE)
+  return (
+    <div className="space-y-2">
+      <Pager page={page} pages={pages} setPage={setPage} />
+      {slice.map((g) => (
+        <GroupBlock key={g.label} group={g} onChange={onChange} />
+      ))}
+      <Pager page={page} pages={pages} setPage={setPage} />
+    </div>
+  )
+}
+
+function GroupBlock({ group, onChange }: { group: { label: string; rule: { scope: 'account' | 'recipient'; text: string } | null; items: ReviewedMovement[]; total: number }; onChange: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [limit, setLimit] = useState(25)
+  const openItems = group.items.filter((m) => needsReview(m))
+
+  function ignoreAll() {
+    ignoreBatch(group.items.map((m) => ({ companyId: m.movement.companyId, txnId: m.movement.txnId })))
+    onChange()
+  }
+  function makeRule() {
+    if (!group.rule) return
+    addRule(group.rule.scope, group.rule.text)
+    onChange()
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-2.5">
+        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpen((o) => !o)}>
+          <span className="text-slate-300">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+          <span className="truncate font-medium text-slate-800">{group.label}</span>
+          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{group.items.length}</span>
+          {openItems.length > 0 && <span className="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">{openItems.length} open</span>}
+        </button>
+        <Money cents={group.total} className="shrink-0 text-sm text-slate-500" />
+        <div className="flex shrink-0 items-center gap-1">
+          <button className="btn-ghost text-xs" onClick={ignoreAll} title="Mark every item here reviewed/ignored">
+            <CheckCircle2 size={13} /> Ignore all
+          </button>
+          {group.rule && (
+            <button className="btn-ghost text-xs" onClick={makeRule} title={`Always ignore ${group.rule.scope === 'account' ? 'this account' : 'this recipient'} in future`}>
+              <Ban size={13} /> Always ignore
+            </button>
+          )}
+        </div>
+      </div>
+      {open && (
+        <div className="border-t border-slate-100 bg-slate-50/40 p-2">
+          {group.items.slice(0, limit).map((m) => (
+            <MovementRow key={keyOf(m)} rm={m} onChange={onChange} dense />
+          ))}
+          {group.items.length > limit && (
+            <button className="btn-ghost mt-1 w-full text-xs" onClick={() => setLimit((l) => l + 50)}>
+              Show {Math.min(50, group.items.length - limit)} more of {group.items.length}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BalanceTieOuts({ pairs }: { pairs: Review['pairs'] }) {
   if (pairs.length === 0) return null
   return (
     <div className="card overflow-hidden">
@@ -207,43 +388,71 @@ function BalanceTieOuts({ pairs }: { pairs: ReturnType<typeof reviewInterCompany
           {pairs.map((p) => (
             <tr key={`${p.aId}:${p.bId}`} className="border-b border-slate-50 last:border-0">
               <td className="px-5 py-2 text-slate-800">{p.aName} ↔ {p.bName}</td>
-              <td className="px-2 py-2 text-right text-slate-600" title={`${p.aName}'s books`}><Money cents={p.loanPerA} colored /></td>
-              <td className="px-2 py-2 text-right text-slate-600" title={`${p.bName}'s books`}><Money cents={p.loanPerB} colored /></td>
+              <td className="px-2 py-2 text-right text-slate-600"><Money cents={p.loanPerA} colored /></td>
+              <td className="px-2 py-2 text-right text-slate-600"><Money cents={p.loanPerB} colored /></td>
               <td className="px-2 py-2 text-right"><Money cents={p.loanDiff} colored /></td>
-              <td className="px-2 py-2 text-right text-slate-600" title={`${p.aName} A/P for ${p.bName} vs ${p.bName} A/R for ${p.aName}`}>
+              <td className="px-2 py-2 text-right text-slate-600">
                 {p.tradeDiff === 0 ? <span className="text-emerald-600">matches</span> : <Money cents={p.tradeDiff} colored />}
               </td>
               <td className="px-5 py-2 text-center">
-                {p.balanced
-                  ? <CheckCircle2 size={15} className="inline text-emerald-500" />
-                  : <AlertTriangle size={15} className="inline text-amber-500" />}
+                {p.balanced ? <CheckCircle2 size={15} className="inline text-emerald-500" /> : <AlertTriangle size={15} className="inline text-amber-500" />}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       <p className="px-5 py-2.5 text-xs text-slate-400">
-        “Loan” nets each company’s inter-company due-to / due-from / notes / loan accounts naming the other.
-        The two books should be equal and opposite, so <strong>loan diff should be zero</strong>. The last column
-        compares one side’s vendor balance for the other against the other’s customer balance — also zero when they agree.
+        “Loan” nets each company’s inter-company due-to / due-from / notes / loan accounts naming the other; the two books should be equal and
+        opposite, so <strong>loan diff should be zero</strong>. The last column compares one side’s vendor balance against the other’s customer balance.
       </p>
     </div>
   )
 }
 
-function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => void }) {
+function RulesPanel({ review, onChange }: { review: Review; onChange: () => void }) {
+  return (
+    <div className="card p-4">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+        <Ban size={15} className="text-slate-400" /> Standing ignore rules
+      </div>
+      {review.rules.length === 0 ? (
+        <p className="text-sm text-slate-400">
+          No rules yet. Use <strong>Always ignore</strong> on a group to stop an account or recipient from being flagged — it survives re-imports.
+        </p>
+      ) : (
+        <ul className="space-y-1 text-sm">
+          {review.rules.map((r) => (
+            <li key={r.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-1.5">
+              <span className="text-slate-700">
+                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">{r.scope}</span>{' '}
+                ignore “{r.match_text}”
+              </span>
+              <button className="btn-ghost text-xs text-rose-600" onClick={() => { deleteRule(r.id); onChange() }}>
+                <Trash2 size={13} /> Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function MovementRow({ rm, onChange, dense }: { rm: ReviewedMovement; onChange: () => void; dense?: boolean }) {
   const [open, setOpen] = useState(false)
   const m = rm.movement
   const resolved = rm.confirmed
+  const ruled = rm.ruled
   const selfTransfer = m.selfTransfer === true
   const hasFlags = rm.flags.length > 0
   const isIgnored = resolved?.resolution === 'ignored'
   const isExternal = resolved?.resolution === 'external'
   const isMatched = resolved?.resolution === 'matched'
+  const openState = hasFlags && !resolved && !ruled && !selfTransfer
 
   return (
-    <div className={clsx('card overflow-hidden', hasFlags && !isIgnored && !isMatched && !isExternal && 'ring-1 ring-amber-200')}>
-      <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={() => setOpen((o) => !o)}>
+    <div className={clsx('card overflow-hidden', openState && 'ring-1 ring-amber-200', dense && 'shadow-none border-slate-100')}>
+      <button className="flex w-full items-center gap-3 px-4 py-2.5 text-left" onClick={() => setOpen((o) => !o)}>
         <span className="text-slate-300">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
         <span className={clsx('inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full', selfTransfer ? 'bg-slate-100 text-slate-500' : m.direction === 'out' ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500')}>
           {selfTransfer ? <ArrowLeftRight size={15} /> : m.direction === 'out' ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />}
@@ -262,7 +471,6 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{KIND_LABEL[m.kind]}</span>
                 <span className="rounded bg-slate-50 px-1.5 py-0.5 text-slate-500">{m.direction === 'out' ? 'from' : 'into'} {m.bankAccountName}</span>
                 {rm.counterparty.type === 'internal' && <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-600">↔ {rm.counterparty.companyName}</span>}
-                {rm.counterparty.type === 'recipient' && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">recipient</span>}
               </>
             )}
           </div>
@@ -270,11 +478,12 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
         <div className="shrink-0 text-right">
           <Money cents={selfTransfer ? Math.abs(m.signedCents) : m.signedCents} colored={!selfTransfer} className="font-semibold" />
           <div className="mt-0.5 flex items-center justify-end gap-1">
-            {selfTransfer && <span className="text-xs text-slate-400">internal transfer</span>}
+            {rm.autoMatch && !resolved && <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-600"><Zap size={11} /> auto</span>}
             {isMatched && <span className="inline-flex items-center gap-1 text-xs text-emerald-600"><CheckCircle2 size={12} /> matched</span>}
             {isExternal && <span className="text-xs text-slate-500">external</span>}
             {isIgnored && <span className="text-xs text-slate-400">ignored</span>}
-            {!resolved && !selfTransfer && rm.flags.map((f) => (
+            {ruled && <span className="inline-flex items-center gap-1 text-xs text-slate-400"><Ban size={11} /> rule</span>}
+            {!resolved && !ruled && !selfTransfer && rm.flags.map((f) => (
               <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700"><AlertTriangle size={11} /> {FLAG_LABEL[f]}</span>
             ))}
           </div>
@@ -283,7 +492,6 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
 
       {open && (
         <div className="border-t border-slate-100 bg-slate-50/50 px-4 py-3 text-sm">
-          {/* Categorization of both-side legs */}
           <div className="mb-3">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               {selfTransfer ? 'Moved between own accounts' : 'How this side is categorized'}
@@ -309,8 +517,11 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
             {m.memo && <div className="mt-1 text-xs text-slate-500">Memo: {m.memo}</div>}
           </div>
 
-          {/* Flags & notes */}
-          {rm.notes.length > 0 && !isIgnored && (
+          {ruled && (
+            <div className="mb-3 text-xs text-slate-500">Auto-ignored by rule: “{ruled.match_text}” ({ruled.scope}).</div>
+          )}
+
+          {rm.notes.length > 0 && !isIgnored && !ruled && (
             <ul className="mb-3 space-y-1">
               {rm.notes.map((n, i) => (
                 <li key={i} className="flex items-start gap-1.5 text-xs text-amber-700"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> {n}</li>
@@ -318,7 +529,6 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
             </ul>
           )}
 
-          {/* Candidate pick-list */}
           {rm.candidates.length > 0 && (
             <div className="mb-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -331,34 +541,33 @@ function MovementRow({ rm, onChange }: { rm: ReviewedMovement; onChange: () => v
                     cand={cand}
                     chosen={isMatched && resolved?.matched_txn_id === cand.movement.txnId}
                     disabled={isMatched || isExternal || isIgnored}
-                    onPick={() => {
-                      confirmMatch(m.companyId, m.txnId, cand.movement.companyId, cand.movement.txnId)
-                      onChange()
-                    }}
+                    onPick={() => { confirmMatch(m.companyId, m.txnId, cand.movement.companyId, cand.movement.txnId); onChange() }}
                   />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Actions */}
           {!selfTransfer && (
-          <div className="flex flex-wrap items-center gap-2">
-            {resolved ? (
-              <button className="btn-ghost text-xs" onClick={() => { clearReview(m.companyId, m.txnId); onChange() }}>
-                <X size={13} /> Re-open
-              </button>
-            ) : (
-              <>
-                <button className="btn-ghost text-xs" onClick={() => { markExternal(m.companyId, m.txnId, m.contactName ?? undefined); onChange() }}>
-                  Mark as external payment
+            <div className="flex flex-wrap items-center gap-2">
+              {ruled ? (
+                <span className="text-xs text-slate-400">Ignored by a standing rule — remove it under “Ignore rules” to re-open.</span>
+              ) : resolved ? (
+                <button className="btn-ghost text-xs" onClick={() => { clearReview(m.companyId, m.txnId); onChange() }}>
+                  <X size={13} /> Re-open
                 </button>
-                <button className="btn-ghost text-xs" onClick={() => { markIgnored(m.companyId, m.txnId); onChange() }}>
-                  Reviewed — ignore
-                </button>
-              </>
-            )}
-          </div>
+              ) : (
+                <>
+                  <button className="btn-ghost text-xs" onClick={() => { markExternal(m.companyId, m.txnId, m.contactName ?? undefined); onChange() }}>Mark as external payment</button>
+                  <button className="btn-ghost text-xs" onClick={() => { markIgnored(m.companyId, m.txnId); onChange() }}>Reviewed — ignore</button>
+                  {m.primaryAccountName && (
+                    <button className="btn-ghost text-xs text-slate-500" onClick={() => { addRule('account', m.primaryAccountName!); onChange() }} title="Always ignore movements coded to this account">
+                      <Ban size={12} /> Always ignore this account
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           )}
         </div>
       )}

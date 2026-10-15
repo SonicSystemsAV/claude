@@ -181,6 +181,7 @@ export async function resetDatabase(): Promise<void> {
   d.run(`
     PRAGMA foreign_keys = OFF;
     DROP TABLE IF EXISTS items;
+    DROP TABLE IF EXISTS interco_rules;
     DROP TABLE IF EXISTS interco_reviews;
     DROP TABLE IF EXISTS intercompany_links;
     DROP TABLE IF EXISTS reconciliations;

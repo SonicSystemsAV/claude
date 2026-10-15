@@ -247,6 +247,20 @@ CREATE TABLE IF NOT EXISTS interco_reviews (
   UNIQUE (company_id, txn_id)
 );
 
+-- Standing rules for the transfer review: auto-resolve movements so a re-import
+-- doesn't re-flag the same thousands. scope 'account' matches an offsetting
+-- account name; 'recipient' matches a contact name. company_id NULL = all
+-- companies. action 'ignore' drops the movement from "needs review".
+CREATE TABLE IF NOT EXISTS interco_rules (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope       TEXT NOT NULL CHECK (scope IN ('account','recipient')),
+  company_id  INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+  match_text  TEXT NOT NULL,
+  action      TEXT NOT NULL DEFAULT 'ignore' CHECK (action IN ('ignore')),
+  note        TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Local user accounts with roles (admin / accountant / viewer).
 CREATE TABLE IF NOT EXISTS users (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
