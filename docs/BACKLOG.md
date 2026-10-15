@@ -27,15 +27,19 @@ build order:
    match transfers, explain numbers. Tool-use loop over the app's own
    primitives; every write previewed, logged to the audit trail, reversible.
    Start on the Transfer Review queue, then general categorization.
-2. **Review Center (unified issue inbox).** One cross-company worklist that
-   aggregates every open issue: uncategorized txns, unreconciled bank items,
-   unbalanced inter-company transfers, suspected duplicates, missing
-   counterparties, tax mismatches. Becomes the assistant's home base.
-3. **Health-check / validation engine.** Battery of accuracy checks feeding the
-   Review Center: trial balance ≠ 0, sub-ledger vs GL drift, inter-company
-   tie-outs (done), duplicate txns, future-dated anomalies, tax collected vs
-   remitted, impossible balances, large MoM swings. Plus a weekly "top 5 to
-   look at" brief.
+2. **Review Center (unified issue inbox).** DONE (v1) — `/review`,
+   `src/pages/ReviewCenter.tsx`. One cross-company worklist aggregating every
+   open issue, ranked by severity, grouped by company, each with a drill-through
+   "fix" link. Sidebar badge shows the open count. Still to add: missing
+   counterparties, tax mismatches, and letting the AI work the Review Center
+   (not just the transfer queue) as its home base.
+3. **Health-check / validation engine.** DONE (v1) — `src/db/healthChecks.ts`,
+   a pluggable battery (`CHECKS[]`) feeding the Review Center. Live checks:
+   trial balance ≠ 0 / unbalanced txns, inter-company tie-outs, transfer
+   backlog, suspense/uncategorized postings, unreconciled bank items, suspected
+   duplicates, future-dated txns. Still to add: sub-ledger vs GL drift, tax
+   collected vs remitted, large MoM swings, and a weekly "top 5 to look at"
+   brief.
 4. **Categorization memory + bank import.** Remember payee→account decisions and
    auto-apply to past/future matches; OFX/CSV bank-feed import with auto-match.
 5. **Findability.** "Explain this number" (click any figure → the txns behind it

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -16,6 +16,7 @@ import {
   BadgeCheck,
   Building2,
   ArrowLeftRight,
+  ShieldCheck,
   Trash2,
   LogOut,
   ChevronDown,
@@ -28,6 +29,7 @@ import coin from './assets/coin-512.png'
 import Dashboard from './pages/Dashboard'
 import Companies from './pages/Companies'
 import TransferReview from './pages/TransferReview'
+import ReviewCenter from './pages/ReviewCenter'
 import Reconcile from './pages/Reconcile'
 import StatementRec from './pages/StatementRec'
 import Accounts from './pages/Accounts'
@@ -44,6 +46,7 @@ import Rules from './pages/Rules'
 import Settings from './pages/Settings'
 import AssistantWidget from './components/AssistantWidget'
 import { countUnmatched } from './db/repo'
+import { runHealthChecks } from './db/healthChecks'
 
 interface NavItem { to: string; label: string; icon: typeof LayoutDashboard; end?: boolean }
 
@@ -52,6 +55,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     label: null,
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+      { to: '/review', label: 'Review Center', icon: ShieldCheck },
       { to: '/companies', label: 'Companies', icon: Building2 },
       { to: '/transfers', label: 'Transfer Review', icon: ArrowLeftRight },
     ],
@@ -114,6 +118,15 @@ function NavItemLink({ item, badge }: { item: NavItem; badge?: number }) {
 function Sidebar() {
   const { companies, currentCompanyId, setCompany, rev } = useStore()
   const unmatched = currentCompanyId ? countUnmatched(currentCompanyId) : 0
+  // Health checks are heavier than a single query, so only recompute the badge
+  // when the ledger actually changes (rev), not on every render.
+  const issueCount = useMemo(() => {
+    try {
+      return runHealthChecks().length
+    } catch {
+      return 0
+    }
+  }, [rev])
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadNavCollapsed)
   void rev
 
@@ -143,7 +156,11 @@ function Sidebar() {
 
       <nav className="flex flex-1 flex-col gap-2">
         {NAV_GROUPS.map((group, gi) => {
-          const badgeFor = (to: string) => (to === '/reconcile' && unmatched > 0 ? unmatched : undefined)
+          const badgeFor = (to: string) => {
+            if (to === '/reconcile' && unmatched > 0) return unmatched
+            if (to === '/review' && issueCount > 0) return issueCount
+            return undefined
+          }
           if (!group.label) {
             return (
               <div key={gi} className="flex flex-col gap-0.5">
@@ -216,6 +233,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
             <Route path="/companies" element={<Companies />} />
+            <Route path="/review" element={<ReviewCenter />} />
             <Route path="/transfers" element={<TransferReview />} />
             <Route path="/sales" element={<Sales />} />
             <Route path="/purchases" element={<Purchases />} />
