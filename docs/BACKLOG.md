@@ -30,9 +30,10 @@ build order:
 2. **Review Center (unified issue inbox).** DONE (v1) — `/review`,
    `src/pages/ReviewCenter.tsx`. One cross-company worklist aggregating every
    open issue, ranked by severity, grouped by company, each with a drill-through
-   "fix" link. Sidebar badge shows the open count. Still to add: missing
-   counterparties, tax mismatches, and letting the AI work the Review Center
-   (not just the transfer queue) as its home base.
+   "fix" link. Sidebar badge shows the open count. The AI now works the Review
+   Center across ALL companies (`src/db/reviewAssistant.ts` — propose → approve
+   → apply, reusing the audited reclass/ignore primitives). Still to add:
+   missing counterparties, tax mismatches.
 3. **Health-check / validation engine.** DONE (v1) — `src/db/healthChecks.ts`,
    a pluggable battery (`CHECKS[]`) feeding the Review Center. Live checks:
    trial balance ≠ 0 / unbalanced txns, inter-company tie-outs, transfer

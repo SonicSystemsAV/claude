@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import {
   ShieldCheck,
@@ -15,6 +15,9 @@ import {
   Copy,
   CalendarClock,
   ChevronRight,
+  Sparkles,
+  Send,
+  CheckCircle2,
 } from 'lucide-react'
 import { useStore } from '../state/store'
 import { formatMoney } from '../lib/money'
@@ -25,6 +28,9 @@ import {
   type IssueCategory,
   type IssueSeverity,
 } from '../db/healthChecks'
+import { loadAssistantConfig } from '../db/assistant'
+import { describeAction, applyProposedAction, type Proposal } from '../db/assistantActions'
+import { runReviewProposal } from '../db/reviewAssistant'
 
 const CATEGORY_META: Record<IssueCategory, { label: string; icon: typeof Scale }> = {
   balance: { label: 'Balance', icon: Scale },
@@ -53,6 +59,7 @@ export default function ReviewCenter() {
   const navigate = useNavigate()
   const [sevFilter, setSevFilter] = useState<SeverityFilter>('all')
   const [companyFilter, setCompanyFilter] = useState<number | 'all'>('all')
+  const [showAi, setShowAi] = useState(false)
 
   // Recompute whenever the ledger changes (rev) or the user re-runs checks.
   const issues = useMemo(() => runHealthChecks(), [rev])
@@ -87,10 +94,23 @@ export default function ReviewCenter() {
             Everything that needs attention, across all your companies — ranked by what matters most.
           </p>
         </div>
-        <button className="btn-ghost flex items-center gap-1.5 text-sm" onClick={() => useStore.getState().refresh()}>
-          <RefreshCw size={15} /> Re-run checks
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className={clsx(
+              'flex items-center gap-1.5 rounded-control border px-3 py-1.5 text-sm font-medium transition',
+              showAi ? 'border-sonic-orange bg-orange-50 text-sonic-orange' : 'border-slate-200 text-muted hover:border-slate-300',
+            )}
+            onClick={() => setShowAi((v) => !v)}
+          >
+            <Sparkles size={15} /> Ask AI
+          </button>
+          <button className="btn-ghost flex items-center gap-1.5 text-sm" onClick={() => useStore.getState().refresh()}>
+            <RefreshCw size={15} /> Re-run checks
+          </button>
+        </div>
       </header>
+
+      {showAi && <ReviewAiPanel issues={issues} onApplied={() => useStore.getState().refresh()} />}
 
       {/* Summary tiles */}
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -238,6 +258,141 @@ function IssueCard({ issue, onFix }: { issue: Issue; onFix: () => void }) {
           <ChevronRight size={15} />
         </button>
       )}
+    </div>
+  )
+}
+
+function ReviewAiPanel({ issues, onApplied }: { issues: Issue[]; onApplied: () => void }) {
+  const config = useMemo(() => loadAssistantConfig(), [])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [proposal, setProposal] = useState<Proposal | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(new Set())
+  const [results, setResults] = useState<string[]>([])
+
+  async function send() {
+    setError(null)
+    setResults([])
+    setProposal(null)
+    setLoading(true)
+    try {
+      const prompt =
+        input.trim() ||
+        'Look at the open issues across all companies and tell me what to fix first. Propose the reclassifications you can apply, and for anything you can\'t fix directly, tell me where to handle it.'
+      const p = await runReviewProposal(prompt, issues, config)
+      setProposal(p)
+      setChecked(new Set(p.actions.map((_, i) => i)))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function apply() {
+    if (!proposal) return
+    const out: string[] = []
+    proposal.actions.forEach((a, i) => {
+      if (checked.has(i)) {
+        try {
+          out.push(applyProposedAction(a))
+        } catch (e) {
+          out.push(`Failed: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+    })
+    setResults(out)
+    setProposal(null)
+    onApplied()
+  }
+
+  return (
+    <div className="card mb-5 space-y-3 p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+        <Sparkles size={15} className="text-sonic-orange" /> Ask AI
+        <span className="text-xs font-normal text-subtle">· works across all your companies</span>
+      </div>
+      <div className="flex items-start gap-2">
+        <textarea
+          className="min-h-[2.5rem] flex-1 rounded-control border border-rule px-3 py-2 text-sm"
+          rows={2}
+          placeholder={`e.g. "Clean up the suspense accounts", "what should I fix first?", or "move all the ATM cash to the shareholder loan"`}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <button className="btn-primary" disabled={loading} onClick={send}>
+          <Send size={14} /> {loading ? 'Thinking…' : 'Send'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-control bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          {error} {error.includes('API key') && <Link to="/settings" className="underline">Open Settings</Link>}
+        </div>
+      )}
+
+      {proposal && (
+        <div className="space-y-2">
+          {proposal.message && <p className="whitespace-pre-wrap text-sm text-muted">{proposal.message}</p>}
+          {proposal.actions.length === 0 ? (
+            <p className="text-sm text-subtle">No actions proposed — see the note above.</p>
+          ) : (
+            <>
+              <div className="text-xs font-semibold uppercase tracking-wide text-subtle">Proposed — review &amp; apply</div>
+              <ul className="space-y-1.5">
+                {proposal.actions.map((a, i) => {
+                  const d = describeAction(a)
+                  return (
+                    <li key={i} className="flex items-start gap-2 rounded-control border border-rule bg-surface px-3 py-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={checked.has(i)}
+                        onChange={(e) => {
+                          const next = new Set(checked)
+                          if (e.target.checked) next.add(i)
+                          else next.delete(i)
+                          setChecked(next)
+                        }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-ink">
+                          {d.label} <span className="text-xs font-normal text-subtle">· {d.impact}</span>
+                        </div>
+                        {a.reason && <div className="text-xs text-muted">{a.reason}</div>}
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="flex items-center gap-2">
+                <button className="btn-primary" disabled={checked.size === 0} onClick={apply}>
+                  Apply {checked.size} selected
+                </button>
+                <button className="btn-ghost text-sm" onClick={() => setProposal(null)}>
+                  Discard
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <ul className="space-y-0.5 text-sm text-emerald-700">
+          {results.map((r, i) => (
+            <li key={i} className="flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> {r}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-xs text-subtle">
+        The AI only proposes — nothing changes until you Apply. Every applied action is balanced, written to the audit log, and
+        reversible. It can reclassify and set ignore rules; deletions, merges, and edits are left for you to do by hand.
+      </p>
     </div>
   )
 }
