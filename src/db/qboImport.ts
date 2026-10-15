@@ -81,28 +81,67 @@ export function mapAccountType(qboType: string): {
 // ---- Parsers ---------------------------------------------------------------
 
 interface AcctDef {
+  /** QBO "Account #" (leaf code), when present — the most reliable match key. */
+  number: string
   name: string
   qboType: string
   balance: number | null
 }
 
+const normName = (s: string | undefined): string => (s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+
+/**
+ * Strip a leading "NNNN " number code from each ':'-separated segment of a QBO
+ * account path. The Journal names an account "60000 88 KING EXPENSE:68600
+ * UTILITIES:HOT WATER TANK RENTAL" while the Account List calls the same account
+ * "88 KING EXPENSE:UTILITIES:HOT WATER TANK RENTAL" (codes in a separate column),
+ * so stripping the codes lets the two forms match.
+ */
+function stripLeadingCodes(name: string): string {
+  return name
+    .split(':')
+    .map((s) => s.replace(/^\s*\d+\s+/, '').trim())
+    .join(':')
+}
+
+/**
+ * Parse a QBO Account List (Chart of Accounts) export by HEADER NAME. The layout
+ * varies — e.g. "Account #, Account Name, Type, Detail type, Description, Total
+ * balance" — so a fixed-position reader silently grabs the wrong columns and the
+ * account types never apply (everything then falls back to name-guessing).
+ */
 function parseAccountList(text: string): AcctDef[] {
   const rows = parseCSV(text)
-  const hi = rows.findIndex((r) => (r[0] || '').trim() === 'Account Name')
+  const hi = rows.findIndex((r) => {
+    const set = r.map(normName)
+    return (set.includes('account name') || set.includes('name')) && (set.includes('type') || set.includes('account type'))
+  })
   if (hi < 0) return []
+  const header = rows[hi]
+  const find = (al: string[]) => header.findIndex((h) => al.includes(normName(h)))
+  const col = {
+    number: find(['account #', 'account no', 'account no.', 'account number', '#', 'number']),
+    name: find(['account name', 'name', 'full name']),
+    type: find(['type', 'account type']),
+    balance: find(['total balance', 'balance']),
+  }
+  if (col.name < 0 || col.type < 0) return []
+  const g = (r: string[], i: number) => (i >= 0 ? (r[i] || '').trim() : '')
   const out: AcctDef[] = []
   for (let i = hi + 1; i < rows.length; i++) {
     const r = rows[i]
-    const name = (r[0] || '').trim()
-    if (!name) continue
-    const balStr = (r[4] || '').trim()
-    out.push({ name, qboType: (r[1] || '').trim(), balance: balStr === '' ? null : money(balStr) })
+    const name = g(r, col.name)
+    if (!name || /^total$/i.test(name)) continue
+    const balStr = g(r, col.balance)
+    out.push({ number: g(r, col.number), name, qboType: g(r, col.type), balance: balStr === '' ? null : money(balStr) })
   }
   return out
 }
 
 interface JLine {
   acct: string
+  /** The Journal's "Distribution account number" (leaf code), when present. */
+  acctNum: string
   amount: number
   num: string
   name: string
@@ -146,6 +185,7 @@ function parseJournal(text: string): JTxn[] {
     // Prefer the full "Account Name" over a bare "Distribution account number"
     // code column (some QBO Journal exports include both).
     account: find(['account name', 'account', 'account full name', 'distribution account name']),
+    acctNum: find(['distribution account number', 'account number', 'account #', 'account no']),
     debit: find(['debit', 'debits']),
     credit: find(['credit', 'credits']),
     amount: find(['amount']),
@@ -175,6 +215,7 @@ function parseJournal(text: string): JTxn[] {
     if (!cur) { cur = { group: '(none)', lines: [] }; txns.push(cur) }
     cur.lines.push({
       acct,
+      acctNum: g(r, col.acctNum),
       amount: amountOf(r),
       num: g(r, col.num),
       name: g(r, col.name),
@@ -428,6 +469,40 @@ export function importQBOJournal(opts: {
   const txns = parseJournal(opts.journalCsv)
   if (txns.length === 0) throw new Error('No transactions found in the Journal CSV.')
 
+  // The Journal and the Account List name accounts differently (the Journal
+  // prefixes each path segment with its code; the List keeps codes in a separate
+  // column), so match the type by account CODE first, then by stripped name, then
+  // by exact name. Accounts the transactions reference are created under the
+  // Journal's own names so the postings link to them.
+  const typeByNumber = new Map<string, string>()
+  const typeByName = new Map<string, string>()
+  for (const a of acctDefs) {
+    if (a.number) typeByNumber.set(a.number.toLowerCase(), a.qboType)
+    typeByName.set(normName(a.name), a.qboType)
+    typeByName.set(normName(stripLeadingCodes(a.name)), a.qboType)
+  }
+  const resolveType = (journalName: string, acctNum: string): string => {
+    if (acctNum && typeByNumber.has(acctNum.toLowerCase())) return typeByNumber.get(acctNum.toLowerCase())!
+    const exact = typeByName.get(normName(journalName))
+    if (exact) return exact
+    const stripped = typeByName.get(normName(stripLeadingCodes(journalName)))
+    if (stripped) return stripped
+    return '' // importQBOData falls back to inferring the type from the name
+  }
+
+  // One representative code per Journal account name (first non-empty seen).
+  const codeByAccount = new Map<string, string>()
+  for (const t of txns) {
+    for (const l of t.lines) {
+      if (!codeByAccount.has(l.acct)) codeByAccount.set(l.acct, l.acctNum || '')
+      else if (!codeByAccount.get(l.acct) && l.acctNum) codeByAccount.set(l.acct, l.acctNum)
+    }
+  }
+  const accounts: QBOAccountInput[] = [...codeByAccount.keys()].map((name) => ({
+    name,
+    qboType: resolveType(name, codeByAccount.get(name) || ''),
+  }))
+
   const transactions: QBOTxnInput[] = txns
     .filter((t) => t.lines.length > 0)
     .map((t) => {
@@ -449,7 +524,7 @@ export function importQBOJournal(opts: {
 
   return importQBOData({
     companyName: opts.companyName,
-    accounts: acctDefs.map((a) => ({ name: a.name, qboType: a.qboType })),
+    accounts,
     transactions,
     skipZero: opts.skipZero,
   })
