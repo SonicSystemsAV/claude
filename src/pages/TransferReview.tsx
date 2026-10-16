@@ -16,6 +16,7 @@ import {
   Zap,
   Layers,
   List as ListIcon,
+  Columns,
   Ban,
   Search,
   Trash2,
@@ -46,6 +47,7 @@ import {
   type MovementKind,
   type MatchCandidate,
   type MovementLeg,
+  type BankMovement,
 } from '../db/interCompanyReview'
 
 const KIND_LABEL: Record<MovementKind, string> = {
@@ -73,8 +75,10 @@ const FLAG_LABEL: Record<TransferFlag, string> = {
 }
 
 type FilterMode = 'needs' | 'internal' | 'recipients' | 'all'
+type ViewMode = 'paired' | 'group' | 'flat'
 const FLAT_PAGE = 50
 const GROUP_PAGE = 20
+const PAIRED_PAGE = 40
 
 function keyOf(rm: ReviewedMovement) {
   return `${rm.movement.companyId}:${rm.movement.txnId}`
@@ -98,7 +102,7 @@ export default function TransferReview() {
   const [end, setEnd] = useState('')
   const [windowDays, setWindowDays] = useState(5)
   const [filter, setFilter] = useState<FilterMode>('needs')
-  const [grouped, setGrouped] = useState(true)
+  const [view, setView] = useState<ViewMode>('paired')
   const [page, setPage] = useState(0)
   const [query, setQuery] = useState('')
   const [showRules, setShowRules] = useState(false)
@@ -111,7 +115,7 @@ export default function TransferReview() {
     [start, end, windowDays, bump, rev],
   )
   const refresh = () => setBump((b) => b + 1)
-  useEffect(() => setPage(0), [filter, grouped, query, start, end, windowDays])
+  useEffect(() => setPage(0), [filter, view, query, start, end, windowDays])
 
   const q = query.trim().toLowerCase()
   const shown = report.movements.filter((m) => {
@@ -231,10 +235,21 @@ export default function TransferReview() {
           </button>
         ))}
         <div className="ml-auto flex items-center gap-1">
-          <span className="text-xs text-slate-400">{shown.length} shown</span>
-          <button onClick={() => setGrouped((g) => !g)} className="btn-ghost text-sm" title={grouped ? 'Flat list' : 'Group by account/company'}>
-            {grouped ? <><ListIcon size={14} /> Flat</> : <><Layers size={14} /> Group</>}
-          </button>
+          <span className="mr-1 text-xs text-slate-400">{shown.length} shown</span>
+          {([
+            ['paired', 'Paired', Columns],
+            ['group', 'Group', Layers],
+            ['flat', 'Flat', ListIcon],
+          ] as const).map(([k, label, Icon]) => (
+            <button
+              key={k}
+              onClick={() => setView(k)}
+              className={clsx('flex items-center gap-1 rounded-md px-2.5 py-1.5 text-sm font-medium transition', view === k ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100')}
+              title={k === 'paired' ? 'Matched pairs, one per row' : k === 'group' ? 'Group by account/company' : 'Flat list'}
+            >
+              <Icon size={14} /> {label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -243,7 +258,9 @@ export default function TransferReview() {
         <div className="card p-8 text-center text-sm text-slate-400">
           {filter === 'needs' ? 'Nothing needs review in this range. 🎉' : 'No movements match.'}
         </div>
-      ) : grouped ? (
+      ) : view === 'paired' ? (
+        <PairedView shown={shown} page={page} setPage={setPage} onChange={refresh} />
+      ) : view === 'group' ? (
         <GroupedList shown={shown} page={page} setPage={setPage} onChange={refresh} />
       ) : (
         <FlatList shown={shown} page={page} setPage={setPage} onChange={refresh} />
@@ -297,6 +314,287 @@ function FlatList({ shown, page, setPage, onChange }: { shown: ReviewedMovement[
         <MovementRow key={keyOf(m)} rm={m} onChange={onChange} />
       ))}
       <Pager page={page} pages={pages} setPage={setPage} />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Paired view — a matched pair on one row: sent (left) ↔ received (right).
+// ---------------------------------------------------------------------------
+
+interface PairCol { id: string; label: string; w: number; num?: boolean }
+const PAIR_COLS: PairCol[] = [
+  { id: 'od', label: 'Date', w: 92 },
+  { id: 'os', label: 'Sender', w: 170 },
+  { id: 'oa', label: 'Account', w: 150 },
+  { id: 'oamt', label: 'Amount', w: 104, num: true },
+  { id: 'onote', label: 'Notes', w: 230 },
+  { id: 'id', label: 'Date', w: 92 },
+  { id: 'ir', label: 'Recipient', w: 170 },
+  { id: 'ia', label: 'Account', w: 150 },
+  { id: 'iamt', label: 'Amount', w: 104, num: true },
+  { id: 'inote', label: 'Notes', w: 230 },
+]
+const COL_WIDTHS_KEY = 'sonic.transferPairedCols'
+
+function useColWidths() {
+  const [widths, setWidths] = useState<Record<string, number>>(() => {
+    const def = Object.fromEntries(PAIR_COLS.map((c) => [c.id, c.w]))
+    try {
+      return { ...def, ...(JSON.parse(localStorage.getItem(COL_WIDTHS_KEY) ?? '{}') as Record<string, number>) }
+    } catch {
+      return def
+    }
+  })
+  const setWidth = (id: string, w: number) =>
+    setWidths((prev) => {
+      const next = { ...prev, [id]: Math.max(60, Math.round(w)) }
+      try { localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  return { widths, setWidth }
+}
+
+interface PairRow {
+  key: string
+  kind: 'out' | 'in' | 'self'
+  rm: ReviewedMovement
+  sent: BankMovement | null
+  recv: BankMovement | null
+  chosen: MatchCandidate | null
+  matched: boolean
+}
+
+function buildPairs(shown: ReviewedMovement[]): PairRow[] {
+  const consumed = new Set<string>()
+  const idOf = (m: BankMovement) => `${m.companyId}:${m.txnId}`
+  const rows: PairRow[] = []
+  // Outgoing movements and self-transfers define a row each; their matched
+  // deposit (confirmed, else best candidate) fills the received side.
+  for (const rm of shown) {
+    const m = rm.movement
+    if (m.selfTransfer) {
+      rows.push({ key: keyOf(rm), kind: 'self', rm, sent: m, recv: m, chosen: null, matched: true })
+      continue
+    }
+    if (m.direction !== 'out') continue
+    const confirmedTxn = rm.confirmed?.resolution === 'matched' ? rm.confirmed.matched_txn_id ?? null : null
+    const chosen = confirmedTxn != null
+      ? rm.candidates.find((c) => c.movement.txnId === confirmedTxn) ?? null
+      : rm.candidates[0] ?? null
+    if (chosen) consumed.add(idOf(chosen.movement))
+    rows.push({ key: keyOf(rm), kind: 'out', rm, sent: m, recv: chosen?.movement ?? null, chosen, matched: confirmedTxn != null })
+  }
+  // Deposits with no matching withdrawal shown stand on their own (received only).
+  for (const rm of shown) {
+    const m = rm.movement
+    if (m.selfTransfer || m.direction !== 'in') continue
+    if (consumed.has(idOf(m))) continue
+    rows.push({ key: keyOf(rm), kind: 'in', rm, sent: null, recv: m, chosen: null, matched: false })
+  }
+  return rows
+}
+
+function PairedView({ shown, page, setPage, onChange }: { shown: ReviewedMovement[]; page: number; setPage: (n: number) => void; onChange: () => void }) {
+  const { widths, setWidth } = useColWidths()
+  const rows = useMemo(() => buildPairs(shown), [shown])
+  const pages = Math.ceil(rows.length / PAIRED_PAGE)
+  usePageKeys(page, pages, setPage)
+  const slice = rows.slice(page * PAIRED_PAGE, page * PAIRED_PAGE + PAIRED_PAGE)
+
+  const EXP_W = 34
+  const ACT_W = 104
+  const total = EXP_W + PAIR_COLS.reduce((s, c) => s + widths[c.id], 0) + ACT_W
+
+  function startResize(e: React.PointerEvent, id: string) {
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX
+    const startW = widths[id]
+    const move = (ev: PointerEvent) => setWidth(id, startW + (ev.clientX - startX))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  return (
+    <div className="space-y-2">
+      <Pager page={page} pages={pages} setPage={setPage} />
+      <div className="card overflow-x-auto p-0">
+        <table className="text-sm" style={{ tableLayout: 'fixed', width: total, minWidth: '100%' }}>
+          <colgroup>
+            <col style={{ width: EXP_W }} />
+            {PAIR_COLS.map((c) => <col key={c.id} style={{ width: widths[c.id] }} />)}
+            <col style={{ width: ACT_W }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th className="bg-slate-50" />
+              <th colSpan={5} className="bg-emerald-600 px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-white">
+                <ArrowUpRight size={12} className="mr-1 inline" /> Sent
+              </th>
+              <th colSpan={5} className="bg-orange-500 px-3 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-white">
+                <ArrowDownLeft size={12} className="mr-1 inline" /> Received
+              </th>
+              <th className="bg-slate-50" />
+            </tr>
+            <tr className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+              <th />
+              {PAIR_COLS.map((c, i) => (
+                <th key={c.id} className={clsx('relative select-none px-3 py-2', c.num && 'text-right', i === 5 && 'border-l-2 border-slate-200')}>
+                  {c.label}
+                  <span
+                    onPointerDown={(e) => startResize(e, c.id)}
+                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize hover:bg-brand-300/50"
+                    title="Drag to resize"
+                  />
+                </th>
+              ))}
+              <th className="px-3 py-2 text-center">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {slice.map((p) => <PairedRow key={p.key} p={p} onChange={onChange} />)}
+          </tbody>
+        </table>
+      </div>
+      <Pager page={page} pages={pages} setPage={setPage} />
+    </div>
+  )
+}
+
+function PairedRow({ p, onChange }: { p: PairRow; onChange: () => void }) {
+  const [open, setOpen] = useState(false)
+  const { rm, sent, recv } = p
+  const self = p.kind === 'self'
+  const resolved = rm.confirmed
+  const isExternal = resolved?.resolution === 'external'
+  const isIgnored = resolved?.resolution === 'ignored'
+  const flagged = rm.flags.length > 0 && !resolved && !rm.ruled && !self
+
+  const notesOf = (m: BankMovement | null) => (m ? [m.reference, m.memo].filter(Boolean).join(' · ') : '')
+  const leftCell = 'bg-emerald-50/40 px-3 py-2 align-top break-words'
+  const rightCell = 'bg-orange-50/40 px-3 py-2 align-top break-words'
+
+  const sentName = self ? sent!.companyName : sent?.companyName ?? '—'
+  const sentAcct = self ? sent!.transferFromName ?? '' : sent?.bankAccountName ?? ''
+  const recvName = self ? recv!.companyName : recv?.companyName ?? (sent?.contactName ?? '—')
+  const recvAcct = self ? recv!.transferToName ?? '' : recv?.bankAccountName ?? ''
+
+  return (
+    <>
+      <tr className={clsx('border-b border-slate-100 hover:bg-slate-50/60', flagged && 'bg-amber-50/30')}>
+        <td className="px-1 py-2 text-center align-top">
+          <button onClick={() => setOpen((o) => !o)} className="text-slate-300 hover:text-slate-600" title="Details">
+            {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          </button>
+        </td>
+        {/* Sent */}
+        <td className={clsx(leftCell, 'whitespace-nowrap text-slate-500')}>{sent ? formatDate(sent.date) : '—'}</td>
+        <td className={clsx(leftCell, 'font-medium text-slate-800')}>{sentName}</td>
+        <td className={clsx(leftCell, 'text-slate-600')}>{sentAcct}</td>
+        <td className={clsx(leftCell, 'whitespace-nowrap text-right')}>{sent ? <Money cents={Math.abs(sent.signedCents)} /> : ''}</td>
+        <td className={clsx(leftCell, 'text-xs text-slate-500')}>{notesOf(sent)}</td>
+        {/* Received */}
+        <td className={clsx(rightCell, 'whitespace-nowrap border-l-2 border-slate-200 text-slate-500')}>{recv ? formatDate(recv.date) : self ? formatDate(sent!.date) : ''}</td>
+        <td className={clsx(rightCell, 'font-medium text-slate-800')}>{recvName}{!recv && !self && sent?.contactName && <span className="ml-1 text-xs font-normal text-slate-400">(external)</span>}</td>
+        <td className={clsx(rightCell, 'text-slate-600')}>{recvAcct}</td>
+        <td className={clsx(rightCell, 'whitespace-nowrap text-right')}>{recv ? <Money cents={Math.abs(recv.signedCents)} /> : self ? <Money cents={Math.abs(sent!.signedCents)} /> : ''}</td>
+        <td className={clsx(rightCell, 'text-xs text-slate-500')}>{notesOf(self ? null : recv)}</td>
+        {/* Action */}
+        <td className="px-2 py-2 text-center align-top">
+          {self ? (
+            <span className="text-xs text-slate-400">internal</span>
+          ) : p.matched ? (
+            <div className="flex flex-col items-center gap-1">
+              <span className="inline-flex items-center gap-1 text-xs text-emerald-600"><CheckCircle2 size={12} /> matched</span>
+              <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => { clearReview(rm.movement.companyId, rm.movement.txnId); onChange() }}>undo</button>
+            </div>
+          ) : isExternal ? (
+            <span className="text-xs text-slate-400">external</span>
+          ) : isIgnored || rm.ruled ? (
+            <span className="text-xs text-slate-400">ignored</span>
+          ) : p.chosen && sent ? (
+            <button
+              className="btn-primary px-2 py-1 text-xs"
+              title={`Confirm match to ${p.chosen.movement.companyName} (${p.chosen.reasons.join(', ')})`}
+              onClick={() => { confirmMatch(sent.companyId, sent.txnId, p.chosen!.movement.companyId, p.chosen!.movement.txnId); onChange() }}
+            >
+              Confirm
+            </button>
+          ) : (
+            <span className="text-xs text-amber-600">no match</span>
+          )}
+        </td>
+      </tr>
+      {open && !self && (
+        <tr>
+          <td colSpan={12} className="border-b border-slate-100 bg-slate-50/60 px-5 py-3">
+            <PairedDetail rm={rm} onChange={onChange} />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function PairedDetail({ rm, onChange }: { rm: ReviewedMovement; onChange: () => void }) {
+  const m = rm.movement
+  const resolved = rm.confirmed
+  const isMatched = resolved?.resolution === 'matched'
+  const isExternal = resolved?.resolution === 'external'
+  const isIgnored = resolved?.resolution === 'ignored'
+  return (
+    <div className="space-y-3 text-sm">
+      {rm.notes.length > 0 && !isIgnored && !rm.ruled && (
+        <ul className="space-y-1">
+          {rm.notes.map((n, i) => (
+            <li key={i} className="flex items-start gap-1.5 text-xs text-amber-700"><AlertTriangle size={12} className="mt-0.5 shrink-0" /> {n}</li>
+          ))}
+        </ul>
+      )}
+
+      {rm.candidates.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            {isMatched ? 'Matched to' : rm.candidates.length === 1 ? 'Possible match' : `Possible matches (${rm.candidates.length}) — pick the right one`}
+          </div>
+          <div className="mt-1 space-y-1.5">
+            {rm.candidates.map((cand) => (
+              <CandidateRow
+                key={`${cand.movement.companyId}:${cand.movement.txnId}`}
+                cand={cand}
+                chosen={isMatched && resolved?.matched_txn_id === cand.movement.txnId}
+                disabled={isMatched || isExternal || isIgnored}
+                onPick={() => { confirmMatch(m.companyId, m.txnId, cand.movement.companyId, cand.movement.txnId); onChange() }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {m.otherLegs.length === 1 && <Recategorize companyId={m.companyId} leg={m.otherLegs[0]} onChange={onChange} />}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {rm.ruled ? (
+          <span className="text-xs text-slate-400">Ignored by a standing rule — remove it under “Ignore rules” to re-open.</span>
+        ) : resolved ? (
+          <button className="btn-ghost text-xs" onClick={() => { clearReview(m.companyId, m.txnId); onChange() }}><X size={13} /> Re-open</button>
+        ) : (
+          <>
+            <button className="btn-ghost text-xs" onClick={() => { markExternal(m.companyId, m.txnId, m.contactName ?? undefined); onChange() }}>Mark as external payment</button>
+            <button className="btn-ghost text-xs" onClick={() => { markIgnored(m.companyId, m.txnId); onChange() }}>Reviewed — ignore</button>
+            {m.primaryAccountName && (
+              <button className="btn-ghost text-xs text-slate-500" onClick={() => { addRule('account', m.primaryAccountName!); onChange() }} title="Always ignore movements coded to this account">
+                <Ban size={12} /> Always ignore this account
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
