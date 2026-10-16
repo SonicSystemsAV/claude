@@ -68,6 +68,18 @@ export function buildProposalContext(companyId: number, review: TransferReview):
     lines.push(`  ${b.accountId != null ? `account #${b.accountId}` : 'NO ACCOUNT'} · ${b.name} · ${b.count} movements · ${formatMoney(b.total, cur)}`)
     for (const ex of b.examples) lines.push(`      e.g. ${ex}`)
   }
+  // Confident auto-matches available for this company (applied with one click
+  // via the "Accept N auto-matches" button, not by an AI proposal).
+  const autos = review.movements.filter((m) => m.movement.companyId === companyId && m.autoMatch)
+  if (autos.length) {
+    lines.push('')
+    lines.push(`AUTO-MATCHABLE TRANSFERS (${autos.length}) — confident one-click matches. These are applied with the "Accept ${review.counts.autoMatchable} auto-matches" button, not by you. Examples:`)
+    for (const m of autos.slice(0, 10)) {
+      const c = m.candidates[0]
+      const to = c ? ` → ${c.movement.companyName} · ${c.movement.bankAccountName} on ${c.movement.date}` : ''
+      lines.push(`  ${m.movement.date} · ${formatMoney(Math.abs(m.movement.signedCents), cur)} · ${m.movement.contactName ?? m.movement.memo ?? ''}${to}`)
+    }
+  }
   if (review.recipients.length) {
     lines.push('')
     lines.push('RECURRING RECIPIENTS: ' + review.recipients.slice(0, 20).map((r) => `${r.name} (${r.count}×)`).join(', '))
@@ -122,6 +134,7 @@ const PROPOSAL_SYSTEM = [
   '- You can SEE all companies: each company\'s headline balances (cash, A/R, A/P, income, expenses, net), the inter-company / loan / due-to-from balances, and the tie-outs. Use these to answer cross-company questions and to say which company\'s balance sheet is misrecording a transfer. You only have the FULL chart of accounts for the active company, so you can only propose reclassify actions within it; to fix another company, tell the user to switch to it first.',
   '- Use ONLY account ids that appear in the chart of accounts. Never invent ids, names, or figures.',
   '- "reclassify" moves every entry from fromAccountId to toAccountId (a pure, balanced reclass). Set "remember":true to save it as a standing rule that re-applies to future imports.',
+  '- Matching transfers is NOT one of your actions. If the user asks about auto-matches, use the AUTO-MATCHABLE list in the context to describe them and tell the user to click the "Accept auto-matches" button — never claim you cannot see them, and never invent a match action.',
   '- Prefer reclassify for miscoded expenses/cash (e.g. undocumented ATM cash to a shareholder-loan account). Prefer ignore for ordinary recurring payments that just need to stop being flagged (mortgages, utilities).',
   '- Be conservative: only propose what the context supports. If unsure, put fewer actions and explain in "message".',
   '- If no action is warranted, return an empty "actions" array and explain in "message".',
