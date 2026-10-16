@@ -109,7 +109,8 @@ function ofxTag(block: string, tag: string): string {
 }
 
 function ofxDate(raw: string): string {
-  // DTPOSTED like 20240131 or 20240131120000[-5:EST]
+  // DTPOSTED like 20240131 or 20240131120000 with an optional gmt-offset/zone
+  // suffix in square brackets, e.g. 20240131120000 then -5 EST in brackets.
   const s = raw.replace(/\[.*$/, '')
   if (s.length >= 8) {
     return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`
