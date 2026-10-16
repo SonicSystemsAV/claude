@@ -20,6 +20,8 @@ import {
   Trash2,
   LogOut,
   ChevronDown,
+  ChevronsLeft,
+  ChevronsRight,
   Settings as SettingsIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -105,7 +107,28 @@ function loadNavCollapsed(): Record<string, boolean> {
   }
 }
 
-function NavItemLink({ item, badge }: { item: NavItem; badge?: number }) {
+const RAIL_KEY = 'sonic.sidebarRail'
+function loadRail(): boolean {
+  try {
+    return localStorage.getItem(RAIL_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function NavItemLink({ item, badge, rail }: { item: NavItem; badge?: number; rail?: boolean }) {
+  if (rail) {
+    return (
+      <NavLink to={item.to} end={item.end} className="nav-item relative justify-center px-0" title={item.label}>
+        <item.icon size={20} strokeWidth={1.8} />
+        {badge ? (
+          <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-sonic-orange px-1 text-[10px] font-bold leading-none text-sonic-black">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        ) : null}
+      </NavLink>
+    )
+  }
   return (
     <NavLink to={item.to} end={item.end} className="nav-item">
       <item.icon size={18} strokeWidth={1.8} />
@@ -128,6 +151,7 @@ function Sidebar() {
     }
   }, [rev])
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadNavCollapsed)
+  const [rail, setRail] = useState<boolean>(loadRail)
   void rev
 
   function toggle(label: string) {
@@ -138,28 +162,68 @@ function Sidebar() {
     })
   }
 
-  return (
-    <aside className="sidebar w-sidebar shrink-0 overflow-y-auto">
-      <img src={logoDark} alt="Sonic the Ledgerhog" className="w-[200px] self-start" />
+  function toggleRail() {
+    setRail((prev) => {
+      const next = !prev
+      try { localStorage.setItem(RAIL_KEY, next ? '1' : '0') } catch { /* ignore */ }
+      return next
+    })
+  }
 
-      <select
-        value={currentCompanyId ?? ''}
-        onChange={(e) => setCompany(Number(e.target.value))}
-        className="min-h-touch w-full rounded-control border border-nav-line bg-nav-input px-3 text-sm font-medium text-nav-text focus:border-sonic-orange focus:outline-none"
-      >
-        {companies.map((c) => (
-          <option key={c.id} value={c.id} className="bg-sonic-black text-nav-text">
-            {c.name}
-          </option>
-        ))}
-      </select>
+  const badgeFor = (to: string) => {
+    if (to === '/reconcile' && unmatched > 0) return unmatched
+    if (to === '/review' && issueCount > 0) return issueCount
+    return undefined
+  }
+
+  return (
+    <aside
+      className={clsx(
+        'sidebar shrink-0 overflow-y-auto overflow-x-hidden transition-[flex-basis] duration-150',
+        rail ? '!basis-[72px] w-[72px] px-2' : 'w-sidebar',
+      )}
+    >
+      {/* Brand + collapse toggle */}
+      <div className={clsx('flex', rail ? 'flex-col items-center gap-3' : 'items-center justify-between')}>
+        {rail ? (
+          <img src={coin} alt="Sonic the Ledgerhog" className="h-9 w-9" />
+        ) : (
+          <img src={logoDark} alt="Sonic the Ledgerhog" className="w-[180px]" />
+        )}
+        <button
+          onClick={toggleRail}
+          title={rail ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={rail ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="grid h-8 w-8 place-items-center rounded-nav text-nav-text hover:bg-nav-active"
+        >
+          {rail ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+        </button>
+      </div>
+
+      {!rail && (
+        <select
+          value={currentCompanyId ?? ''}
+          onChange={(e) => setCompany(Number(e.target.value))}
+          className="min-h-touch w-full rounded-control border border-nav-line bg-nav-input px-3 text-sm font-medium text-nav-text focus:border-sonic-orange focus:outline-none"
+        >
+          {companies.map((c) => (
+            <option key={c.id} value={c.id} className="bg-sonic-black text-nav-text">
+              {c.name}
+            </option>
+          ))}
+        </select>
+      )}
 
       <nav className="flex flex-1 flex-col gap-2">
         {NAV_GROUPS.map((group, gi) => {
-          const badgeFor = (to: string) => {
-            if (to === '/reconcile' && unmatched > 0) return unmatched
-            if (to === '/review' && issueCount > 0) return issueCount
-            return undefined
+          // Rail mode: icon-only, no group headers, everything visible.
+          if (rail) {
+            return (
+              <div key={gi} className="flex flex-col gap-0.5">
+                {gi > 0 && <div className="mx-auto my-1 h-px w-8 bg-nav-line" />}
+                {group.items.map((item) => <NavItemLink key={item.to} item={item} badge={badgeFor(item.to)} rail />)}
+              </div>
+            )
           }
           if (!group.label) {
             return (
@@ -186,7 +250,7 @@ function Sidebar() {
         })}
       </nav>
 
-      <UserFooter />
+      <UserFooter rail={rail} />
     </aside>
   )
 }
@@ -256,7 +320,7 @@ export default function App() {
   )
 }
 
-function UserFooter() {
+function UserFooter({ rail }: { rail?: boolean }) {
   const user = useStore((s) => s.currentUser)
   const logout = useStore((s) => s.logout)
   if (!user) return null
@@ -266,6 +330,20 @@ function UserFooter() {
       : user.role === 'accountant'
         ? 'text-nav-text'
         : 'text-subtle'
+  if (rail) {
+    return (
+      <div className="mt-auto border-t border-nav-line pt-4">
+        <button
+          className="mx-auto grid h-9 w-9 place-items-center rounded-nav text-nav-text hover:bg-nav-active"
+          onClick={logout}
+          title={`Log out (${user.name})`}
+          aria-label="Log out"
+        >
+          <LogOut size={18} strokeWidth={1.8} />
+        </button>
+      </div>
+    )
+  }
   return (
     <div className="mt-auto border-t border-nav-line pt-4">
       <div className="flex items-center justify-between">
