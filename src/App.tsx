@@ -361,6 +361,20 @@ function UserFooter({ rail }: { rail?: boolean }) {
           <LogOut size={16} strokeWidth={1.8} /> Log out
         </button>
       </div>
+      <BuildStamp />
+    </div>
+  )
+}
+
+/** Small git build stamp so a refresh is self-verifying: match this against the
+ *  commit Claude says is latest. Baked in at build / dev-server start. */
+function BuildStamp() {
+  const rev = typeof __BUILD_REV__ === 'string' ? __BUILD_REV__ : 'unknown'
+  const time = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : ''
+  return (
+    <div className="mt-3 select-text text-[11px] text-subtle" title="Code version currently running">
+      build <span className="font-mono text-nav-text">{rev}</span>
+      {time ? ` · ${time}` : ''}
     </div>
   )
 }
