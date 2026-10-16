@@ -1,4 +1,5 @@
 mod assistant;
+mod dev;
 mod oauth_loopback;
 mod square;
 mod qbo;
@@ -15,7 +16,8 @@ pub fn run() {
       square::square_api,
       qbo::qbo_oauth,
       qbo::qbo_oauth_refresh,
-      qbo::qbo_api
+      qbo::qbo_api,
+      dev::dev_update
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

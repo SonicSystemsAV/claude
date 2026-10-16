@@ -47,6 +47,7 @@ import RecycleBin from './pages/RecycleBin'
 import Rules from './pages/Rules'
 import Settings from './pages/Settings'
 import AssistantWidget from './components/AssistantWidget'
+import DevUpdateButton from './components/DevUpdateButton'
 import { countUnmatched } from './db/repo'
 import { runHealthChecks } from './db/healthChecks'
 
@@ -316,6 +317,7 @@ export default function App() {
         </Routes>
       </main>
       <AssistantWidget />
+      <DevUpdateButton />
     </div>
   )
 }
