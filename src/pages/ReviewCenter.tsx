@@ -306,14 +306,16 @@ function ReviewAiPanel({ issues, onApplied }: { issues: Issue[]; onApplied: () =
   const [results, setResults] = useState<string[]>([])
 
   async function send() {
+    if (loading) return
+    const prompt =
+      input.trim() ||
+      'Look at the open issues across all companies and tell me what to fix first. Propose the reclassifications you can apply, and for anything you can\'t fix directly, tell me where to handle it.'
     setError(null)
     setResults([])
     setProposal(null)
     setLoading(true)
+    setInput('')
     try {
-      const prompt =
-        input.trim() ||
-        'Look at the open issues across all companies and tell me what to fix first. Propose the reclassifications you can apply, and for anything you can\'t fix directly, tell me where to handle it.'
       const p = await runReviewProposal(prompt, issues, config)
       setProposal(p)
       setChecked(new Set(p.actions.map((_, i) => i)))
@@ -351,9 +353,10 @@ function ReviewAiPanel({ issues, onApplied }: { issues: Issue[]; onApplied: () =
         <textarea
           className="min-h-[2.5rem] flex-1 rounded-control border border-rule px-3 py-2 text-sm"
           rows={2}
-          placeholder={`e.g. "Clean up the suspense accounts", "what should I fix first?", or "move all the ATM cash to the shareholder loan"`}
+          placeholder={`e.g. "Clean up the suspense accounts", "what should I fix first?", or "move all the ATM cash to the shareholder loan"  (Enter to send, Shift+Enter for a new line)`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
         />
         <button className="btn-primary" disabled={loading} onClick={send}>
           <Send size={14} /> {loading ? 'Thinking…' : 'Send'}

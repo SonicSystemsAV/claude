@@ -635,9 +635,11 @@ function AiPanel({ companyId, review, onChange }: { companyId: number | null; re
 
   async function send() {
     if (companyId == null) { setError('Pick a company first (top-left company switcher) — the assistant acts on the active company.'); return }
-    setError(null); setResults([]); setProposal(null); setLoading(true)
+    if (loading) return
+    const msg = input.trim() || `Suggest how to handle the needs-review items for ${companyName ?? 'this company'}.`
+    setError(null); setResults([]); setProposal(null); setLoading(true); setInput('')
     try {
-      const p = await runProposal(companyId, input.trim() || `Suggest how to handle the needs-review items for ${companyName ?? 'this company'}.`, review, config)
+      const p = await runProposal(companyId, msg, review, config)
       setProposal(p)
       setChecked(new Set(p.actions.map((_, i) => i)))
     } catch (e) {
@@ -663,9 +665,10 @@ function AiPanel({ companyId, review, onChange }: { companyId: number | null; re
         <textarea
           className="min-h-[2.5rem] flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
           rows={2}
-          placeholder={`e.g. "Reclassify all undocumented ATM cash to the shareholder loan", or "how should I handle these?"`}
+          placeholder={`e.g. "Reclassify all undocumented ATM cash to the shareholder loan", or "how should I handle these?"  (Enter to send, Shift+Enter for a new line)`}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
         />
         <button className="btn-primary" disabled={loading} onClick={send}><Send size={14} /> {loading ? 'Thinking…' : 'Send'}</button>
       </div>

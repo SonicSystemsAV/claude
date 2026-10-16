@@ -14,10 +14,10 @@
 
 import type { AnthropicRequest, AssistantConfig } from './assistant'
 import { DEFAULT_ASSISTANT_MODEL, getAssistantTransport } from './assistant'
-import { getAccounts, getAccount, getCompany } from './repo'
+import { getAccounts, getAccount, getCompany, companyOverview } from './repo'
 import { formatMoney } from '../lib/money'
 import { reclassAccount, addCategoryRule, countEntriesOnAccount } from './categoryRules'
-import { addRule, needsReview, type TransferReview, type ReviewedMovement } from './interCompanyReview'
+import { addRule, needsReview, interCompanyLoanAccounts, type TransferReview, type ReviewedMovement } from './interCompanyReview'
 
 export type ProposedAction =
   | { type: 'reclassify'; companyId: number; fromAccountId: number; toAccountId: number; remember: boolean; reason: string }
@@ -72,6 +72,27 @@ export function buildProposalContext(companyId: number, review: TransferReview):
     lines.push('')
     lines.push('RECURRING RECIPIENTS: ' + review.recipients.slice(0, 20).map((r) => `${r.name} (${r.count}×)`).join(', '))
   }
+  // Cross-company balance picture, so the assistant can answer questions about
+  // the OTHER companies (not just the active one) — headline figures plus the
+  // inter-company / loan / due-to-from account balances that drive tie-outs.
+  if (review.companies.length > 1) {
+    lines.push('')
+    lines.push('ALL COMPANIES — headline balances (for cross-company comparison; the active company above also has its full chart):')
+    for (const co of review.companies) {
+      const o = companyOverview(co.id)
+      const cc = getCompany(co.id)?.base_currency ?? cur
+      lines.push(`  ${co.name}: Cash ${formatMoney(o.cash, cc)} · A/R ${formatMoney(o.ar, cc)} · A/P ${formatMoney(o.ap, cc)} · Income ${formatMoney(o.income, cc)} · Expenses ${formatMoney(o.expense, cc)} · Net ${formatMoney(o.net, cc)}`)
+    }
+    const ic = interCompanyLoanAccounts(review.companies.map((c) => ({ id: c.id, name: c.name })))
+    if (ic.length) {
+      lines.push('')
+      lines.push('INTER-COMPANY / LOAN / DUE-TO-FROM BALANCES across all companies (+ = receivable owed TO this company, − = payable this company owes):')
+      for (const a of ic) {
+        lines.push(`  ${a.companyName} · ${a.accountName}${a.otherCompany ? ` (re ${a.otherCompany})` : ''} · ${formatMoney(a.balanceCents, cur)}`)
+      }
+    }
+  }
+
   if (review.pairs.length) {
     lines.push('')
     lines.push('INTER-COMPANY TIE-OUTS (all companies; LOAN DIFF should be 0 — non-zero means the two books disagree):')
@@ -98,6 +119,7 @@ const PROPOSAL_SYSTEM = [
   '}',
   '',
   'Rules:',
+  '- You can SEE all companies: each company\'s headline balances (cash, A/R, A/P, income, expenses, net), the inter-company / loan / due-to-from balances, and the tie-outs. Use these to answer cross-company questions and to say which company\'s balance sheet is misrecording a transfer. You only have the FULL chart of accounts for the active company, so you can only propose reclassify actions within it; to fix another company, tell the user to switch to it first.',
   '- Use ONLY account ids that appear in the chart of accounts. Never invent ids, names, or figures.',
   '- "reclassify" moves every entry from fromAccountId to toAccountId (a pure, balanced reclass). Set "remember":true to save it as a standing rule that re-applies to future imports.',
   '- Prefer reclassify for miscoded expenses/cash (e.g. undocumented ATM cash to a shareholder-loan account). Prefer ignore for ordinary recurring payments that just need to stop being flagged (mortgages, utilities).',
