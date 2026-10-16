@@ -15,6 +15,7 @@ import {
   Copy,
   CalendarClock,
   ChevronRight,
+  ChevronDown,
   Sparkles,
   Send,
   CheckCircle2,
@@ -25,6 +26,7 @@ import {
 } from 'lucide-react'
 import { useStore } from '../state/store'
 import { formatMoney } from '../lib/money'
+import { Money } from '../components/Money'
 import {
   runHealthChecks,
   summarize,
@@ -36,6 +38,7 @@ import {
 import { loadAssistantConfig } from '../db/assistant'
 import { describeAction, applyProposedAction, type Proposal } from '../db/assistantActions'
 import { runReviewProposal } from '../db/reviewAssistant'
+import { interCompanyPairDetail, type PairSideAccount } from '../db/interCompanyReview'
 
 const CATEGORY_META: Record<IssueCategory, { label: string; icon: typeof Scale }> = {
   balance: { label: 'Balance', icon: Scale },
@@ -268,29 +271,102 @@ function IssueCard({ issue, onFix }: { issue: Issue; onFix: () => void }) {
   const sev = SEVERITY_META[issue.severity]
   const cat = CATEGORY_META[issue.category]
   const CatIcon = cat.icon
+  const [expanded, setExpanded] = useState(false)
+  const pair = issue.id.match(/^interco:(\d+):(\d+)$/)
   return (
-    <div className="card flex items-start gap-3 p-4">
-      <div className={clsx('mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full', sev.dot)} title={sev.label} />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
-            <CatIcon size={12} /> {cat.label}
-          </span>
-          <h3 className="text-[15px] font-semibold text-ink">{issue.title}</h3>
+    <div className="card p-4">
+      <div className="flex items-start gap-3">
+        <div className={clsx('mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full', sev.dot)} title={sev.label} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-600">
+              <CatIcon size={12} /> {cat.label}
+            </span>
+            <h3 className="text-[15px] font-semibold text-ink">{issue.title}</h3>
+          </div>
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">{issue.detail}</p>
+          {issue.amountCents > 0 && (
+            <p className="mt-1 text-[13px] font-medium text-ink">{formatMoney(issue.amountCents, issue.currency)}</p>
+          )}
+          {pair && (
+            <button
+              className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-sonic-orange"
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              {expanded ? 'Hide account breakdown' : 'Show account breakdown'}
+            </button>
+          )}
         </div>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted">{issue.detail}</p>
-        {issue.amountCents > 0 && (
-          <p className="mt-1 text-[13px] font-medium text-ink">{formatMoney(issue.amountCents, issue.currency)}</p>
+        {issue.fix && (
+          <button
+            className="btn-ghost flex shrink-0 items-center gap-1 self-center text-[13px] font-medium text-sonic-orange"
+            onClick={onFix}
+          >
+            {issue.fix.label}
+            <ChevronRight size={15} />
+          </button>
         )}
       </div>
-      {issue.fix && (
-        <button
-          className="btn-ghost flex shrink-0 items-center gap-1 self-center text-[13px] font-medium text-sonic-orange"
-          onClick={onFix}
-        >
-          {issue.fix.label}
-          <ChevronRight size={15} />
-        </button>
+      {pair && expanded && <IntercoDetail aId={Number(pair[1])} bId={Number(pair[2])} currency={issue.currency} />}
+    </div>
+  )
+}
+
+function IntercoDetail({ aId, bId, currency }: { aId: number; bId: number; currency: string }) {
+  const detail = useMemo(() => interCompanyPairDetail(aId, bId), [aId, bId])
+  if (!detail) return null
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-3 border-t border-rule pt-3 sm:grid-cols-2">
+      <PairSide title={detail.aName} accounts={detail.aAccounts} counted={detail.loanPerA} currency={currency} />
+      <PairSide title={detail.bName} accounts={detail.bAccounts} counted={detail.loanPerB} currency={currency} />
+      <div className="sm:col-span-2 rounded-control bg-slate-50 px-3 py-2 text-[12px] text-muted">
+        Tie-out compares only the accounts that <strong>name the other company</strong> (✓): {detail.aName}{' '}
+        <Money cents={detail.loanPerA} currency={currency} /> vs {detail.bName}{' '}
+        <Money cents={detail.loanPerB} currency={currency} /> → <strong>off by {formatMoney(Math.abs(detail.loanDiff), currency)}</strong>.
+        Rows marked “property-named” are real loan accounts the tie-out can’t match by name — check whether they have a
+        mirror on the other side.
+      </div>
+    </div>
+  )
+}
+
+function PairSide({
+  title,
+  accounts,
+  counted,
+  currency,
+}: {
+  title: string
+  accounts: PairSideAccount[]
+  counted: number
+  currency: string
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between">
+        <h4 className="text-[13px] font-semibold text-ink">{title}</h4>
+        <span className="text-[12px] text-subtle">counted: {formatMoney(counted, currency)}</span>
+      </div>
+      {accounts.length === 0 ? (
+        <p className="text-[12px] text-subtle">No loan / due-to-from accounts.</p>
+      ) : (
+        <ul className="space-y-1">
+          {accounts.map((a) => (
+            <li key={a.accountId} className="flex items-start justify-between gap-2 text-[12px]">
+              <span className="min-w-0">
+                <span className={clsx(a.namesOther ? 'text-emerald-600' : 'text-amber-600')}>
+                  {a.namesOther ? '✓' : '○'}
+                </span>{' '}
+                <span className="text-ink">{a.name}</span>
+                {!a.namesOther && <span className="text-subtle"> · property-named, not matched</span>}
+              </span>
+              <span className="whitespace-nowrap font-medium text-ink">
+                <Money cents={a.balanceCents} currency={currency} />
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

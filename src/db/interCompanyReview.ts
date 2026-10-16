@@ -691,6 +691,76 @@ export function interCompanyLoanAccounts(companies?: { id: number; name: string 
   return out
 }
 
+/** One loan/transfer account on one side of a company pair. */
+export interface PairSideAccount {
+  accountId: number
+  name: string
+  type: string
+  /** Debit-positive balance: + = asset/receivable (owed to us), − = liability/payable (we owe). */
+  balanceCents: number
+  /** True when the account name references the other company (so the tie-out counts it). */
+  namesOther: boolean
+}
+
+export interface InterCoPairDetail {
+  aId: number
+  aName: string
+  bId: number
+  bName: string
+  /** Every loan/transfer account with a non-zero balance on each side. */
+  aAccounts: PairSideAccount[]
+  bAccounts: PairSideAccount[]
+  /** Net of the accounts that name the other company — what the tie-out actually compares. */
+  loanPerA: number
+  loanPerB: number
+  loanDiff: number
+}
+
+/**
+ * Account-level breakdown of a company pair's loan/transfer position, so the UI
+ * can show exactly which accounts drive (or are missed by) a tie-out mismatch.
+ * Accounts that name the other company are the ones the tie-out counts; accounts
+ * named by property/other (e.g. "Loans to other parties: 88 King") are shown too
+ * but flagged as not-counted, since a real inter-company loan can hide there.
+ */
+export function interCompanyPairDetail(aId: number, bId: number): InterCoPairDetail | null {
+  const cos = all<{ id: number; name: string }>('SELECT id, name FROM companies')
+  const a = cos.find((c) => c.id === aId)
+  const b = cos.find((c) => c.id === bId)
+  if (!a || !b) return null
+  const distinct = distinctiveTokens(cos)
+  const aTok = distinct.get(aId) ?? []
+  const bTok = distinct.get(bId) ?? []
+
+  const side = (companyId: number, otherTokens: string[]): PairSideAccount[] => {
+    const accts = all<{ id: number; name: string; type: string }>(
+      'SELECT id, name, type FROM accounts WHERE company_id = ? AND archived = 0',
+      [companyId],
+    )
+    const out: PairSideAccount[] = []
+    for (const ac of accts) {
+      if (!isTransferAccount(ac.name)) continue
+      const bal = accountBalanceCents(ac.id)
+      if (bal === 0) continue
+      const words = new Set(tokenize(ac.name))
+      out.push({
+        accountId: ac.id,
+        name: ac.name,
+        type: ac.type,
+        balanceCents: bal,
+        namesOther: otherTokens.some((t) => words.has(t)),
+      })
+    }
+    return out.sort((x, y) => Math.abs(y.balanceCents) - Math.abs(x.balanceCents))
+  }
+
+  const aAccounts = side(aId, bTok)
+  const bAccounts = side(bId, aTok)
+  const loanPerA = aAccounts.filter((x) => x.namesOther).reduce((s, x) => s + x.balanceCents, 0)
+  const loanPerB = bAccounts.filter((x) => x.namesOther).reduce((s, x) => s + x.balanceCents, 0)
+  return { aId, aName: a.name, bId, bName: b.name, aAccounts, bAccounts, loanPerA, loanPerB, loanDiff: loanPerA + loanPerB }
+}
+
 export function reviewInterCompanyTransfers(opts: ReviewOptions = {}): TransferReview {
   const windowDays = opts.matchWindowDays ?? 7
   const recipientMinCount = opts.recipientMinCount ?? 2
