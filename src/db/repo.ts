@@ -180,6 +180,65 @@ export function setAccountArchived(id: number, archived: boolean): void {
   run('UPDATE accounts SET archived = ? WHERE id = ?', [archived ? 1 : 0, id])
 }
 
+/**
+ * Rename / renumber / retype an account (for standardizing the chart). Only
+ * metadata changes — entries and their amounts are untouched, so every
+ * transaction stays balanced. Changing the type resyncs the normal balance.
+ */
+export function updateAccount(
+  id: number,
+  patch: { code?: string; name?: string; type?: AccountType; is_bank?: boolean },
+): void {
+  const a = getAccount(id)
+  if (!a) throw new Error('Account not found.')
+  const code = patch.code?.trim() ?? a.code
+  const name = patch.name?.trim() ?? a.name
+  const type = patch.type ?? a.type
+  const isBank = patch.is_bank ?? a.is_bank === 1
+  if (!code) throw new Error('Account number is required.')
+  if (!name) throw new Error('Account name is required.')
+  if (code !== a.code) {
+    const clash = one<{ id: number }>(
+      'SELECT id FROM accounts WHERE company_id = ? AND code = ? AND id <> ?',
+      [a.company_id, code, id],
+    )
+    if (clash) throw new Error(`Account number ${code} is already used in this company.`)
+  }
+  const normal = normalBalanceFor(type)
+  tx(() => {
+    run('UPDATE accounts SET code = ?, name = ?, type = ?, normal_balance = ?, is_bank = ? WHERE id = ?', [
+      code, name, type, normal, isBank ? 1 : 0, id,
+    ])
+    const changes: string[] = []
+    if (code !== a.code) changes.push(`# ${a.code}→${code}`)
+    if (name !== a.name) changes.push(`name “${a.name}”→“${name}”`)
+    if (type !== a.type) changes.push(`type ${a.type}→${type}`)
+    audit(a.company_id, 'update', 'account', id, `Edited account ${code} ${name}${changes.length ? ` (${changes.join(', ')})` : ''}`)
+  })
+}
+
+/**
+ * Merge one account into another within the same company: every entry on
+ * `fromId` is moved to `toId`, then the now-empty source is archived (kept, not
+ * deleted, so the change is auditable and reversible). Returns entries moved.
+ */
+export function mergeAccounts(fromId: number, toId: number): number {
+  if (fromId === toId) return 0
+  const from = getAccount(fromId)
+  const to = getAccount(toId)
+  if (!from || !to) throw new Error('Account not found.')
+  if (from.company_id !== to.company_id) throw new Error('Both accounts must belong to the same company.')
+  let moved = 0
+  tx(() => {
+    const r = one<{ n: number }>('SELECT COUNT(*) AS n FROM entries WHERE account_id = ?', [fromId])
+    moved = r?.n ?? 0
+    run('UPDATE entries SET account_id = ? WHERE account_id = ?', [toId, fromId])
+    run('UPDATE accounts SET archived = 1 WHERE id = ?', [fromId])
+    audit(from.company_id, 'update', 'account', toId, `Merged ${from.code} ${from.name} → ${to.code} ${to.name} (${moved} entr${moved === 1 ? 'y' : 'ies'})`)
+  })
+  return moved
+}
+
 export function normalBalanceFor(type: AccountType): NormalBalance {
   return type === 'asset' || type === 'expense' ? 'debit' : 'credit'
 }

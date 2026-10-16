@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Plus, Landmark, X, ChevronRight } from 'lucide-react'
+import { Plus, Landmark, X, ChevronRight, Pencil } from 'lucide-react'
 import { useStore, useCan } from '../state/store'
-import { getAccounts, displayBalance, createAccount, generalLedger, getAccount } from '../db/repo'
+import { getAccounts, displayBalance, createAccount, generalLedger, getAccount, updateAccount, mergeAccounts } from '../db/repo'
 import type { Account, AccountType, NormalBalance } from '../db/types'
 import { Money } from '../components/Money'
 import { formatDate } from '../lib/format'
@@ -30,6 +30,7 @@ export default function Accounts() {
   void rev
   const [adding, setAdding] = useState(false)
   const [registerId, setRegisterId] = useState<number | null>(null)
+  const [editId, setEditId] = useState<number | null>(null)
   if (companyId == null) return null
 
   const accounts = getAccounts(companyId)
@@ -82,6 +83,15 @@ export default function Accounts() {
                         <span className="inline-flex items-center gap-1.5">
                           {a.is_bank === 1 && <Landmark size={14} className="text-brand-500" />}
                           {a.name}
+                          {canEdit && (
+                            <button
+                              className="opacity-0 transition group-hover:opacity-100"
+                              title="Edit / renumber / merge"
+                              onClick={(e) => { e.stopPropagation(); setEditId(a.id) }}
+                            >
+                              <Pencil size={13} className="text-slate-400 hover:text-sonic-orange" />
+                            </button>
+                          )}
                         </span>
                       </td>
                       <td className="px-5 py-2.5 text-right">
@@ -102,6 +112,103 @@ export default function Accounts() {
       {registerId != null && (
         <AccountRegister companyId={companyId} accountId={registerId} onClose={() => setRegisterId(null)} />
       )}
+
+      {editId != null && (
+        <EditAccountModal
+          companyId={companyId}
+          id={editId}
+          onClose={() => setEditId(null)}
+          onSaved={() => { setEditId(null); refresh() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: number; id: number; onClose: () => void; onSaved: () => void }) {
+  const acct = getAccount(id)
+  const [code, setCode] = useState(acct?.code ?? '')
+  const [name, setName] = useState(acct?.name ?? '')
+  const [type, setType] = useState<AccountType>(acct?.type ?? 'expense')
+  const [isBank, setIsBank] = useState(acct?.is_bank === 1)
+  const [mergeTarget, setMergeTarget] = useState<number | ''>('')
+  const [err, setErr] = useState<string | null>(null)
+
+  const others = getAccounts(companyId).filter((a) => a.id !== id)
+  if (!acct) return null
+
+  function save() {
+    setErr(null)
+    try {
+      updateAccount(id, { code, name, type, is_bank: isBank })
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function doMerge() {
+    if (mergeTarget === '') return
+    const target = others.find((a) => a.id === mergeTarget)
+    if (!target) return
+    if (!window.confirm(`Move every transaction from “${acct!.code} ${acct!.name}” into “${target.code} ${target.name}” and archive this account? This is reversible from the audit log but affects reports.`)) return
+    setErr(null)
+    try {
+      mergeAccounts(id, Number(mergeTarget))
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" onClick={onClose}>
+      <div className="card w-full max-w-md space-y-4 p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-ink">Edit account</h2>
+          <button className="rounded-nav p-1 text-muted hover:bg-rule-soft" onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </div>
+
+        {err && <div className="rounded-control bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+
+        <div className="grid grid-cols-3 gap-3">
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted">Number</span>
+            <input className="input w-full text-sm" value={code} onChange={(e) => setCode(e.target.value)} />
+          </label>
+          <label className="col-span-2 text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted">Name</span>
+            <input className="input w-full text-sm" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+        </div>
+        <div className="flex items-end gap-3">
+          <label className="text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted">Type</span>
+            <select className="input text-sm" value={type} onChange={(e) => setType(e.target.value as AccountType)}>
+              {TYPE_ORDER.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 pb-2 text-sm text-ink">
+            <input type="checkbox" checked={isBank} onChange={(e) => setIsBank(e.target.checked)} /> Bank / cash account
+          </label>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="btn-primary" onClick={save}>Save changes</button>
+          <button className="btn-ghost text-sm" onClick={onClose}>Cancel</button>
+        </div>
+
+        <div className="border-t border-rule pt-3">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-subtle">Merge / consolidate</div>
+          <p className="mb-2 text-xs text-muted">Move all of this account’s transactions into another account, then archive this one. Use it to combine duplicates (e.g. several “Chris” loan accounts).</p>
+          <div className="flex items-center gap-2">
+            <select className="input flex-1 text-sm" value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value === '' ? '' : Number(e.target.value))}>
+              <option value="">Merge into…</option>
+              {others.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name} ({a.type})</option>)}
+            </select>
+            <button className="btn-ghost text-sm text-rose-600 disabled:text-slate-300" disabled={mergeTarget === ''} onClick={doMerge}>Merge</button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
