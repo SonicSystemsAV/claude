@@ -35,6 +35,7 @@ import ReviewCenter from './pages/ReviewCenter'
 import Reconcile from './pages/Reconcile'
 import StatementRec from './pages/StatementRec'
 import Accounts from './pages/Accounts'
+import StandardizeChart from './pages/StandardizeChart'
 import Transactions from './pages/Transactions'
 import Contacts from './pages/Contacts'
 import Items from './pages/Items'
@@ -305,6 +306,7 @@ export default function App() {
             <Route path="/reconcile" element={<Reconcile />} />
             <Route path="/statements" element={<StatementRec />} />
             <Route path="/accounts" element={<Accounts />} />
+            <Route path="/accounts/standardize" element={<StandardizeChart />} />
             <Route path="/transactions" element={<Transactions />} />
             <Route path="/contacts" element={<Contacts />} />
             <Route path="/items" element={<Items />} />

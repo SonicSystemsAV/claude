@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Plus, Landmark, X, ChevronRight, Pencil } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Plus, Landmark, X, ChevronRight, Pencil, Wand2 } from 'lucide-react'
 import { useStore, useCan } from '../state/store'
 import { getAccounts, displayBalance, createAccount, generalLedger, getAccount, updateAccount, mergeAccounts } from '../db/repo'
 import type { Account, AccountType, NormalBalance } from '../db/types'
@@ -44,9 +45,14 @@ export default function Accounts() {
           <p className="text-sm text-slate-500">{accounts.length} accounts</p>
         </div>
         {canEdit && (
-          <button className="btn-primary" onClick={() => setAdding((v) => !v)}>
-            <Plus size={16} /> New account
-          </button>
+          <div className="flex items-center gap-2">
+            <Link to="/accounts/standardize" className="btn-ghost flex items-center gap-1.5 text-sm">
+              <Wand2 size={15} /> Standardize
+            </Link>
+            <button className="btn-primary" onClick={() => setAdding((v) => !v)}>
+              <Plus size={16} /> New account
+            </button>
+          </div>
         )}
       </div>
 
