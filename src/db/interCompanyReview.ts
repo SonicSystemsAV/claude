@@ -587,24 +587,44 @@ function accountBalanceCents(accountId: number): number {
   return r?.s ?? 0
 }
 
-/** Net inter-company loan position in `companyId`'s books toward `otherName`.
- *  + = the other company owes us, − = we owe the other company. */
-function loanPositionToward(companyId: number, otherTokens: string[]): number {
-  const accts = all<{ id: number; name: string; type: string }>(
-    `SELECT id, name, type FROM accounts WHERE company_id = ? AND archived = 0`,
+/** Net inter-company loan position in `companyId`'s books toward the other
+ *  company. + = the other company owes us, − = we owe the other company.
+ *
+ *  An account with an explicit counterparty TAG is authoritative: it counts
+ *  toward the pair when (and only when) its tag matches the other company's code
+ *  — no name-guessing. Untagged accounts fall back to the fuzzy rule (looks like
+ *  a loan account AND names the other company). This way tagged books tie out
+ *  exactly while legacy/untagged books still work. */
+function loanPositionToward(companyId: number, otherTokens: string[], otherCode?: string | null): number {
+  const accts = all<{ id: number; name: string; cp: string | null }>(
+    `SELECT id, name, interco_counterparty AS cp FROM accounts WHERE company_id = ? AND archived = 0`,
     [companyId],
   )
+  const oc = otherCode ? otherCode.trim().toLowerCase() : null
   let net = 0
   for (const a of accts) {
-    if (!isTransferAccount(a.name)) continue
-    const words = new Set(tokenize(a.name))
-    if (!otherTokens.some((t) => words.has(t))) continue
-    const bal = accountBalanceCents(a.id) // debit-positive raw balance
-    // Asset (due-from / loan-to): debit balance = they owe us → +.
-    // Liability (due-to / loan-from): credit balance (negative raw) = we owe → −.
-    net += bal
+    const tag = a.cp ? a.cp.trim().toLowerCase() : null
+    let include: boolean
+    if (tag) {
+      include = oc != null && tag === oc
+    } else {
+      if (!isTransferAccount(a.name)) continue
+      const words = new Set(tokenize(a.name))
+      include = otherTokens.some((t) => words.has(t))
+    }
+    if (!include) continue
+    // Asset (due-from): debit balance = they owe us → +. Liability (due-to):
+    // credit balance (negative raw) = we owe → −.
+    net += accountBalanceCents(a.id)
   }
   return net
+}
+
+/** Each company's own inter-company short code (ONT/AV/SSP), by id. */
+function companyCodeById(): Map<number, string | null> {
+  return new Map(
+    all<{ id: number; c: string | null }>('SELECT id, interco_code AS c FROM companies').map((r) => [r.id, r.c]),
+  )
 }
 
 /** A/P or A/R balance in `companyId` attributable to a contact naming `otherTokens`. */
@@ -634,6 +654,7 @@ function subledgerBalance(companyId: number, otherTokens: string[], want: 'AP' |
 export function interCompanyTieOuts(companies?: { id: number; name: string }[]): PairTieOut[] {
   const cos = companies ?? all<{ id: number; name: string }>('SELECT id, name FROM companies ORDER BY name')
   const distinct = distinctiveTokens(cos)
+  const codeById = companyCodeById()
   const pairs: PairTieOut[] = []
   for (let i = 0; i < cos.length; i++) {
     for (let j = i + 1; j < cos.length; j++) {
@@ -641,8 +662,8 @@ export function interCompanyTieOuts(companies?: { id: number; name: string }[]):
       const b = cos[j]
       const aTok = distinct.get(a.id) ?? []
       const bTok = distinct.get(b.id) ?? []
-      const loanPerA = loanPositionToward(a.id, bTok) // + = B owes A
-      const loanPerB = loanPositionToward(b.id, aTok) // + = A owes B
+      const loanPerA = loanPositionToward(a.id, bTok, codeById.get(b.id)) // + = B owes A
+      const loanPerB = loanPositionToward(b.id, aTok, codeById.get(a.id)) // + = A owes B
       const apFromA = subledgerBalance(a.id, bTok, 'AP')
       const arFromB = subledgerBalance(b.id, aTok, 'AR')
       const loanDiff = loanPerA + loanPerB
@@ -672,18 +693,27 @@ export interface InterCoAccountBalance {
 export function interCompanyLoanAccounts(companies?: { id: number; name: string }[]): InterCoAccountBalance[] {
   const cos = companies ?? all<{ id: number; name: string }>('SELECT id, name FROM companies ORDER BY name')
   const distinct = distinctiveTokens(cos)
+  const codeToName = new Map<string, string>()
+  for (const r of all<{ name: string; code: string | null }>('SELECT name, interco_code AS code FROM companies')) {
+    if (r.code) codeToName.set(r.code.trim().toLowerCase(), r.name)
+  }
   const out: InterCoAccountBalance[] = []
   for (const c of cos) {
-    const accts = all<{ id: number; name: string; type: string }>('SELECT id, name, type FROM accounts WHERE company_id = ? AND archived = 0', [c.id])
+    const accts = all<{ id: number; name: string; type: string; cp: string | null }>('SELECT id, name, type, interco_counterparty AS cp FROM accounts WHERE company_id = ? AND archived = 0', [c.id])
     for (const a of accts) {
-      if (!isTransferAccount(a.name)) continue
+      const tag = a.cp ? a.cp.trim().toLowerCase() : null
+      if (!tag && !isTransferAccount(a.name)) continue
       const raw = accountBalanceCents(a.id) // debit-positive
       if (raw === 0) continue
-      const words = new Set(tokenize(a.name))
       let other: string | null = null
-      for (const o of cos) {
-        if (o.id === c.id) continue
-        if ((distinct.get(o.id) ?? []).some((t) => words.has(t))) { other = o.name; break }
+      if (tag) {
+        other = codeToName.get(tag) ?? tag.toUpperCase()
+      } else {
+        const words = new Set(tokenize(a.name))
+        for (const o of cos) {
+          if (o.id === c.id) continue
+          if ((distinct.get(o.id) ?? []).some((t) => words.has(t))) { other = o.name; break }
+        }
       }
       out.push({ companyId: c.id, companyName: c.name, accountName: a.name, otherCompany: other, balanceCents: raw })
     }
@@ -724,7 +754,7 @@ export interface InterCoPairDetail {
  * but flagged as not-counted, since a real inter-company loan can hide there.
  */
 export function interCompanyPairDetail(aId: number, bId: number): InterCoPairDetail | null {
-  const cos = all<{ id: number; name: string }>('SELECT id, name FROM companies')
+  const cos = all<{ id: number; name: string; code: string | null }>('SELECT id, name, interco_code AS code FROM companies')
   const a = cos.find((c) => c.id === aId)
   const b = cos.find((c) => c.id === bId)
   if (!a || !b) return null
@@ -732,30 +762,26 @@ export function interCompanyPairDetail(aId: number, bId: number): InterCoPairDet
   const aTok = distinct.get(aId) ?? []
   const bTok = distinct.get(bId) ?? []
 
-  const side = (companyId: number, otherTokens: string[]): PairSideAccount[] => {
-    const accts = all<{ id: number; name: string; type: string }>(
-      'SELECT id, name, type FROM accounts WHERE company_id = ? AND archived = 0',
+  const side = (companyId: number, otherTokens: string[], otherCode: string | null): PairSideAccount[] => {
+    const oc = otherCode ? otherCode.trim().toLowerCase() : null
+    const accts = all<{ id: number; name: string; type: string; cp: string | null }>(
+      'SELECT id, name, type, interco_counterparty AS cp FROM accounts WHERE company_id = ? AND archived = 0',
       [companyId],
     )
     const out: PairSideAccount[] = []
     for (const ac of accts) {
-      if (!isTransferAccount(ac.name)) continue
+      const tag = ac.cp ? ac.cp.trim().toLowerCase() : null
+      if (!tag && !isTransferAccount(ac.name)) continue
       const bal = accountBalanceCents(ac.id)
       if (bal === 0) continue
-      const words = new Set(tokenize(ac.name))
-      out.push({
-        accountId: ac.id,
-        name: ac.name,
-        type: ac.type,
-        balanceCents: bal,
-        namesOther: otherTokens.some((t) => words.has(t)),
-      })
+      const counted = tag ? oc != null && tag === oc : otherTokens.some((t) => new Set(tokenize(ac.name)).has(t))
+      out.push({ accountId: ac.id, name: ac.name, type: ac.type, balanceCents: bal, namesOther: counted })
     }
     return out.sort((x, y) => Math.abs(y.balanceCents) - Math.abs(x.balanceCents))
   }
 
-  const aAccounts = side(aId, bTok)
-  const bAccounts = side(bId, aTok)
+  const aAccounts = side(aId, bTok, b.code)
+  const bAccounts = side(bId, aTok, a.code)
   const loanPerA = aAccounts.filter((x) => x.namesOther).reduce((s, x) => s + x.balanceCents, 0)
   const loanPerB = bAccounts.filter((x) => x.namesOther).reduce((s, x) => s + x.balanceCents, 0)
   return { aId, aName: a.name, bId, bName: b.name, aAccounts, bAccounts, loanPerA, loanPerB, loanDiff: loanPerA + loanPerB }

@@ -301,11 +301,11 @@ function IntercoDetail({ aId, bId, currency }: { aId: number; bId: number; curre
       <PairSide title={detail.aName} accounts={detail.aAccounts} counted={detail.loanPerA} currency={currency} />
       <PairSide title={detail.bName} accounts={detail.bAccounts} counted={detail.loanPerB} currency={currency} />
       <div className="sm:col-span-2 rounded-control bg-slate-50 px-3 py-2 text-[12px] text-muted">
-        Tie-out compares only the accounts that <strong>name the other company</strong> (✓): {detail.aName}{' '}
+        Tie-out compares the accounts <strong>tagged to / naming the other company</strong> (✓): {detail.aName}{' '}
         <Money cents={detail.loanPerA} currency={currency} /> vs {detail.bName}{' '}
         <Money cents={detail.loanPerB} currency={currency} /> → <strong>off by {formatMoney(Math.abs(detail.loanDiff), currency)}</strong>.
-        Rows marked “property-named” are real loan accounts the tie-out can’t match by name — check whether they have a
-        mirror on the other side.
+        Rows marked “not counted” are loan accounts with no counterparty tag and no name match — check whether they belong
+        to this pair and have a mirror on the other side.
       </div>
     </div>
   )
@@ -339,7 +339,7 @@ function PairSide({
                   {a.namesOther ? '✓' : '○'}
                 </span>{' '}
                 <span className="text-ink">{a.name}</span>
-                {!a.namesOther && <span className="text-subtle"> · property-named, not matched</span>}
+                {!a.namesOther && <span className="text-subtle"> · not counted for this pair</span>}
               </span>
               <span className="whitespace-nowrap font-medium text-ink">
                 <Money cents={a.balanceCents} currency={currency} />
