@@ -14,7 +14,8 @@
 
 import type { AnthropicRequest, AssistantConfig } from './assistant'
 import { DEFAULT_ASSISTANT_MODEL, getAssistantTransport } from './assistant'
-import { getAccounts, getAccount, getCompany, companyOverview } from './repo'
+import { getAccounts, getAccount, getCompany, companyOverview, mergeAccounts, updateAccount } from './repo'
+import type { AccountType } from './types'
 import { formatMoney } from '../lib/money'
 import { reclassAccount, addCategoryRule, countEntriesOnAccount } from './categoryRules'
 import { addRule, needsReview, interCompanyLoanAccounts, type TransferReview, type ReviewedMovement } from './interCompanyReview'
@@ -23,6 +24,8 @@ export type ProposedAction =
   | { type: 'reclassify'; companyId: number; fromAccountId: number; toAccountId: number; remember: boolean; reason: string }
   | { type: 'ignore_account'; companyId: number | null; accountName: string; reason: string }
   | { type: 'ignore_recipient'; companyId: number | null; recipientName: string; reason: string }
+  | { type: 'merge_account'; companyId: number; fromAccountId: number; toAccountId: number; reason: string }
+  | { type: 'rename_account'; companyId: number; accountId: number; newCode?: string; newName?: string; newType?: AccountType; reason: string }
 
 export interface Proposal {
   message: string
@@ -190,6 +193,14 @@ export function describeAction(a: ProposedAction): { label: string; impact: stri
       impact: `${n} entr${n === 1 ? 'y' : 'ies'}`,
     }
   }
+  if (a.type === 'merge_account') {
+    const n = countEntriesOnAccount(a.fromAccountId)
+    return { label: `Merge ${accountLabel(a.fromAccountId)} → ${accountLabel(a.toAccountId)}`, impact: `${n} entr${n === 1 ? 'y' : 'ies'}` }
+  }
+  if (a.type === 'rename_account') {
+    const bits = [a.newCode && `# ${a.newCode}`, a.newName && `“${a.newName}”`, a.newType].filter(Boolean).join(' · ')
+    return { label: `Rename ${accountLabel(a.accountId)} → ${bits || '(no change)'}`, impact: 'metadata' }
+  }
   if (a.type === 'ignore_account') return { label: `Always ignore account “${a.accountName}”`, impact: 'rule' }
   return { label: `Always ignore recipient “${a.recipientName}”`, impact: 'rule' }
 }
@@ -208,6 +219,14 @@ export function applyProposedAction(a: ProposedAction): string {
     }
     const moved = reclassAccount(a.fromAccountId, a.toAccountId)
     return `Reclassified ${moved} entries.`
+  }
+  if (a.type === 'merge_account') {
+    const moved = mergeAccounts(a.fromAccountId, a.toAccountId)
+    return `Merged into ${accountLabel(a.toAccountId)} (${moved} entr${moved === 1 ? 'y' : 'ies'}).`
+  }
+  if (a.type === 'rename_account') {
+    updateAccount(a.accountId, { code: a.newCode, name: a.newName, type: a.newType })
+    return `Updated ${accountLabel(a.accountId)}.`
   }
   if (a.type === 'ignore_account') {
     addRule('account', a.accountName, a.companyId ?? undefined, a.reason)
