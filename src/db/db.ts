@@ -52,6 +52,12 @@ function migrate(database: Database): void {
   if (!hasColumn(database, 'documents', 'payment_method')) {
     database.run('ALTER TABLE documents ADD COLUMN payment_method TEXT')
   }
+  if (!hasColumn(database, 'accounts', 'interco_counterparty')) {
+    database.run('ALTER TABLE accounts ADD COLUMN interco_counterparty TEXT')
+  }
+  if (!hasColumn(database, 'companies', 'interco_code')) {
+    database.run('ALTER TABLE companies ADD COLUMN interco_code TEXT')
+  }
   if (!hasColumn(database, 'document_lines', 'item_id')) {
     database.run('ALTER TABLE document_lines ADD COLUMN item_id INTEGER')
   }

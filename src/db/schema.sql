@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS companies (
   legal_name     TEXT,
   base_currency  TEXT NOT NULL DEFAULT 'CAD',
   locked_through TEXT,
+  interco_code   TEXT,                -- this company's short code for inter-company tagging (e.g. ONT/AV/SSP)
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   is_bank        INTEGER NOT NULL DEFAULT 0,
   parent_id      INTEGER REFERENCES accounts(id),
   archived       INTEGER NOT NULL DEFAULT 0,
+  interco_counterparty TEXT,          -- short code of the related company this account faces (e.g. ONT/AV/SSP)
   UNIQUE (company_id, code)
 );
 

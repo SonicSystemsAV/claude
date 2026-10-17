@@ -46,6 +46,8 @@ export interface Company {
   legal_name: string | null
   base_currency: string
   locked_through: string | null
+  /** This company's short code for inter-company tagging (e.g. ONT/AV/SSP). */
+  interco_code?: string | null
   created_at: string
 }
 
@@ -77,6 +79,8 @@ export interface Account {
   is_bank: number
   parent_id: number | null
   archived: number
+  /** Short code of the related company this account faces (e.g. ONT/AV/SSP). */
+  interco_counterparty?: string | null
 }
 
 export interface Transaction {

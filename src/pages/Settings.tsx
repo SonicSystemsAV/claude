@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Upload, RotateCcw, Plus, Database, FileSpreadsheet, Lock, Percent, Trash2, Users, KeyRound, FolderOpen, FilePlus, Save, HardDrive, Clock, CreditCard, Bot, Link2, Building2, Image as ImageIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
@@ -9,6 +9,7 @@ import { createCompany, listCompanies, getCompany, setLockedThrough, getAccounts
 import { getTaxCodes, createTaxCode, deleteTaxCode } from '../db/documents'
 import { formatDate, DATE_FORMATS, getDateFormatId, setDateFormat } from '../lib/format'
 import { importQBOJournal, type QBOImportSummary } from '../db/qboImport'
+import { importStandard, type StandardImportSummary } from '../db/sonicImport'
 import { createSquareConnector } from '../db/payments/square'
 import { importFromConnector, type ConnectorStatus, type ImportPaymentSummary } from '../db/payments/connector'
 import { askAssistant, DEFAULT_ASSISTANT_MODEL, ASSISTANT_LS_KEYS } from '../db/assistant'
@@ -148,6 +149,7 @@ export default function Settings() {
 
       {isAdmin && <ManageCompaniesSection />}
       <CompanyProfileSection />
+      <StandardImportSection />
       <QBOImportSection />
       <QBOLiveSection />
       <SquareConnectSection />
@@ -1200,6 +1202,108 @@ function QBOLiveSection() {
           Pulls the General Ledger for the date range and rebuilds it as balanced double-entry (a new company).
           Create your app at <span className="font-mono">developer.intuit.com</span>; start in Sandbox. Production
           needs Intuit’s app review before other users can connect.
+        </p>
+      </div>
+    </Section>
+  )
+}
+
+function StandardImportSection() {
+  const reloadCompanies = useStore((s) => s.reloadCompanies)
+  const setCompany = useStore((s) => s.setCompany)
+  const rev = useStore((s) => s.rev)
+  const [name, setName] = useState('')
+  const [code, setCode] = useState('')
+  const [accounts, setAccounts] = useState<File | null>(null)
+  const [journal, setJournal] = useState<File | null>(null)
+  const [replaceId, setReplaceId] = useState<number | ''>('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<StandardImportSummary | null>(null)
+  const companies = useMemo(() => listCompanies(), [rev])
+
+  async function runImport() {
+    if (!accounts || !journal || !name.trim()) return
+    if (replaceId !== '' && !window.confirm('This will permanently delete the selected company and all its data, then reload it from these CSVs. Continue?')) return
+    setBusy(true); setError(null); setResult(null)
+    try {
+      const accountsCsv = await accounts.text()
+      const journalCsv = await journal.text()
+      const summary = importStandard({
+        companyName: name.trim(),
+        intercoCode: code.trim() || undefined,
+        accountsCsv,
+        journalCsv,
+        replaceCompanyId: replaceId === '' ? undefined : Number(replaceId),
+      })
+      setResult(summary)
+      reloadCompanies()
+      setCompany(summary.companyId)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section
+      icon={<FileSpreadsheet size={18} />}
+      title="Import standardized CSVs (Sonic format)"
+      subtitle="Load the cleaned account-list + journal CSVs (Account #, parent, class, counterparty tag, Txn-ID journal)."
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <input
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm sm:col-span-2"
+            placeholder="Company name (e.g. 1933230 Ontario Inc.)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            placeholder="Code (ONT / AV / SSP)"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            title="This company's short code, matching the Intercompany Counterparty tags in the other companies' charts"
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FilePick label="Account List CSV (required)" file={accounts} onPick={setAccounts} />
+          <FilePick label="Journal CSV (required)" file={journal} onPick={setJournal} />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <span>Wipe &amp; reload an existing company:</span>
+          <select className="rounded-md border border-slate-300 px-2 py-1 text-sm" value={replaceId} onChange={(e) => setReplaceId(e.target.value === '' ? '' : Number(e.target.value))}>
+            <option value="">No — create new</option>
+            {companies.map((c: { id: number; name: string }) => <option key={c.id} value={c.id}>Replace: {c.name}</option>)}
+          </select>
+        </label>
+        <button className="btn-primary" disabled={busy || !accounts || !journal || !name.trim()} onClick={runImport}>
+          {busy ? 'Importing…' : replaceId === '' ? 'Import' : 'Wipe & reload'}
+        </button>
+
+        {error && <div className="rounded-lg bg-rose-50 px-4 py-2 text-sm text-rose-700">{error}</div>}
+        {result && (
+          <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            <div className="font-semibold">Imported “{result.companyName}” ✓</div>
+            <ul className="mt-1 space-y-0.5 text-emerald-700">
+              <li>{result.transactions.toLocaleString()} transactions · {result.entries.toLocaleString()} entries</li>
+              <li>{result.accounts} accounts · {result.contacts} contacts</li>
+              {result.roundingAdjustments > 0 && <li>{result.roundingAdjustments} rounding fix(es), net {formatMoney(result.roundingTotalCents)}</li>}
+              {result.unknownAccounts.length > 0 && <li>{result.unknownAccounts.length} journal account(s) not in the chart — created as “Unmapped”</li>}
+            </ul>
+            {result.unbalancedSkipped > 0 && (
+              <div className="mt-2 rounded-md bg-rose-100 px-3 py-2 text-rose-800">
+                <div className="font-semibold">⚠ {result.unbalancedSkipped.toLocaleString()} transaction(s) didn’t balance and were skipped</div>
+                <div className="text-xs">Debits ≠ credits — re-check the journal CSV. Net off by {formatMoney(result.unbalancedTotalCents)}.</div>
+              </div>
+            )}
+          </div>
+        )}
+        <p className="text-xs text-slate-400">
+          The Account # links the journal to the chart directly, and the Intercompany Counterparty tag (ONT/AV/SSP) is
+          kept so tie-outs can match by counterparty, not by name.
         </p>
       </div>
     </Section>
