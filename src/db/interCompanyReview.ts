@@ -596,13 +596,17 @@ function accountBalanceCents(accountId: number): number {
  *  a loan account AND names the other company). This way tagged books tie out
  *  exactly while legacy/untagged books still work. */
 function loanPositionToward(companyId: number, otherTokens: string[], otherCode?: string | null): number {
-  const accts = all<{ id: number; name: string; cp: string | null }>(
-    `SELECT id, name, interco_counterparty AS cp FROM accounts WHERE company_id = ? AND archived = 0`,
+  const accts = all<{ id: number; name: string; type: string; cp: string | null }>(
+    `SELECT id, name, type, interco_counterparty AS cp FROM accounts WHERE company_id = ? AND archived = 0`,
     [companyId],
   )
   const oc = otherCode ? otherCode.trim().toLowerCase() : null
   let net = 0
   for (const a of accts) {
+    // Inter-company balances live on the BALANCE SHEET (due-from = asset,
+    // due-to = liability). Income/expense/equity accounts that merely reference
+    // the other company are flows, not balances — never part of the loan tie-out.
+    if (a.type !== 'asset' && a.type !== 'liability') continue
     const tag = a.cp ? a.cp.trim().toLowerCase() : null
     let include: boolean
     if (tag) {
@@ -701,6 +705,7 @@ export function interCompanyLoanAccounts(companies?: { id: number; name: string 
   for (const c of cos) {
     const accts = all<{ id: number; name: string; type: string; cp: string | null }>('SELECT id, name, type, interco_counterparty AS cp FROM accounts WHERE company_id = ? AND archived = 0', [c.id])
     for (const a of accts) {
+      if (a.type !== 'asset' && a.type !== 'liability') continue // balance-sheet only
       const tag = a.cp ? a.cp.trim().toLowerCase() : null
       if (!tag && !isTransferAccount(a.name)) continue
       const raw = accountBalanceCents(a.id) // debit-positive
@@ -770,6 +775,7 @@ export function interCompanyPairDetail(aId: number, bId: number): InterCoPairDet
     )
     const out: PairSideAccount[] = []
     for (const ac of accts) {
+      if (ac.type !== 'asset' && ac.type !== 'liability') continue // balance-sheet only
       const tag = ac.cp ? ac.cp.trim().toLowerCase() : null
       if (!tag && !isTransferAccount(ac.name)) continue
       const bal = accountBalanceCents(ac.id)
