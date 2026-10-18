@@ -21,7 +21,7 @@ import {
   getAssistantTransport,
 } from './assistant'
 import { listCompanies, companyOverview, getAccounts, displayBalance } from './repo'
-import { interCompanyTieOuts, interCompanyPairDetail } from './interCompanyReview'
+import { interCompanyTieOuts, interCompanyPairDetail, reviewInterCompanyTransfers, needsReview } from './interCompanyReview'
 import { runHealthChecks, type Issue } from './healthChecks'
 import { formatMoney } from '../lib/money'
 import type { ProposedAction } from './assistantActions'
@@ -78,8 +78,68 @@ export function buildAgentContext(): string {
     for (const i of issues.slice(0, 40)) {
       lines.push(`  [${i.severity}] ${i.companyName} · ${i.category} · ${i.title}${i.amountCents > 0 ? ` · ${formatMoney(i.amountCents, i.currency)}` : ''}`)
     }
+    lines.push('')
   }
+
+  lines.push(...buildTransferSection())
   return lines.join('\n')
+}
+
+/** Transfer Review state for the agent: the auto-matchable transfers behind the
+ *  "Accept N auto-matches" button, the needs-review buckets, and the recurring
+ *  recipients — so the owner can ask "what's in the 174 auto-matches?" etc. */
+function buildTransferSection(): string[] {
+  const lines: string[] = []
+  let review
+  try { review = reviewInterCompanyTransfers() } catch { return lines }
+
+  lines.push('===== TRANSFER REVIEW =====')
+  lines.push(`Button "Accept N auto-matches": ${review.counts.autoMatchable} confident one-click matches. Needs review: ${review.counts.needsReview}.`)
+
+  const autos = review.movements.filter((m) => m.autoMatch)
+  if (autos.length) {
+    lines.push('')
+    lines.push(`AUTO-MATCHABLE TRANSFERS (${autos.length}) — exact amount, ≤2 days apart, both sides named. Applied by the "Accept auto-matches" button, not by you:`)
+    for (const m of autos.slice(0, 40)) {
+      const c = m.candidates[0]
+      const to = c ? ` → ${c.movement.companyName} · ${c.movement.bankAccountName} on ${c.movement.date}` : ''
+      lines.push(`  ${m.movement.companyName} · ${m.movement.date} · ${formatMoney(Math.abs(m.movement.signedCents), 'CAD')} · ${m.movement.contactName ?? m.movement.memo ?? ''}${to}`)
+    }
+    if (autos.length > 40) lines.push(`  …and ${autos.length - 40} more`)
+  }
+
+  // Needs-review movements grouped by offsetting account (what to reclassify).
+  type Bucket = { company: string; name: string; count: number; total: number; examples: string[] }
+  const buckets = new Map<string, Bucket>()
+  for (const m of review.movements) {
+    if (!needsReview(m)) continue
+    const leg = m.movement.otherLegs[0]
+    const key = `${m.movement.companyId}:${leg ? leg.accountId : 'none'}`
+    const name = leg ? `${leg.accountCode} ${leg.accountName}` : '(no offsetting account)'
+    const b = buckets.get(key) ?? { company: m.movement.companyName, name, count: 0, total: 0, examples: [] }
+    b.count++
+    b.total += Math.abs(m.movement.signedCents)
+    if (b.examples.length < 2) {
+      const ex = [m.movement.date, m.movement.contactName, m.movement.memo].filter(Boolean).join(' · ')
+      if (ex) b.examples.push(ex)
+    }
+    buckets.set(key, b)
+  }
+  const top = [...buckets.values()].sort((x, y) => y.count - x.count).slice(0, 25)
+  if (top.length) {
+    lines.push('')
+    lines.push('NEEDS-REVIEW BUCKETS (by offsetting account — candidates to reclassify or ignore):')
+    for (const b of top) {
+      lines.push(`  ${b.company} · ${b.name} · ${b.count} movements · ${formatMoney(b.total, 'CAD')}`)
+      for (const ex of b.examples) lines.push(`      e.g. ${ex}`)
+    }
+  }
+
+  if (review.recipients.length) {
+    lines.push('')
+    lines.push('RECURRING RECIPIENTS: ' + review.recipients.slice(0, 20).map((r) => `${r.name} (${r.count}×)`).join(', '))
+  }
+  return lines
 }
 
 const AGENT_SYSTEM = [
@@ -101,6 +161,8 @@ const AGENT_SYSTEM = [
   '',
   'Rules:',
   '- Never invent ids, account names, or figures — use only what is in the context.',
+  '- The TRANSFER REVIEW section lists the auto-matchable transfers (behind the "Accept N auto-matches" button), the needs-review buckets, and the recurring recipients. Use it to answer questions like "what\'s in the 174 auto-matches?" — the examples there are real; do not claim you cannot see them. Only up to ~40 examples per list are shown, so for the complete list tell the owner it continues in the Transfer Review screen.',
+  '- Your context is balances, chart of accounts, tie-outs, open issues, and the Transfer Review summary above — NOT every individual transaction. If asked to list specific transactions you cannot see, say so and point the owner to the account register (click an account in Chart of Accounts) or the Transfer Review / All Transactions screens, rather than guessing.',
   '- You can reclassify, merge, rename, and set ignore rules. You CANNOT yet post new journal entries, so you cannot create a missing mirror entry or change an amount — if that is what is needed (e.g. an inter-company balance that is simply absent on one side), say so plainly and explain what the owner should post, rather than inventing an action.',
   '- Money is integer-exact and already balanced; reclass/merge only move entries between accounts, never change amounts.',
   '- Be concise, show the figures you used, and propose a few conservative actions at a time rather than a huge batch. If unsure, ask.',
