@@ -59,9 +59,30 @@ export interface AssistantConfig {
 
 // ---- Minimal Anthropic Messages API shapes (dependency-free) --------------
 
+/** A plain-text block (the ordinary case). */
+export interface TextBlock { type: 'text'; text: string }
+/** An inline image (PNG/JPEG/GIF/WebP) the model can see. */
+export interface ImageBlock {
+  type: 'image'
+  source: { type: 'base64'; media_type: string; data: string }
+}
+/** A document the model can read — a base64 PDF, or plain text (e.g. a CSV
+ *  report) carried as a text source with a title. */
+export interface DocumentBlock {
+  type: 'document'
+  source:
+    | { type: 'base64'; media_type: 'application/pdf'; data: string }
+    | { type: 'text'; media_type: 'text/plain'; data: string }
+  title?: string
+}
+export type ContentBlock = TextBlock | ImageBlock | DocumentBlock
+
 export interface AnthropicMessage {
   role: 'user' | 'assistant'
-  content: string
+  /** Either plain text, or a list of content blocks (text + attachments). The
+   *  Tauri transport forwards the whole request body as raw JSON, so multimodal
+   *  blocks reach the API without any Rust change. */
+  content: string | ContentBlock[]
 }
 
 export interface AnthropicRequest {

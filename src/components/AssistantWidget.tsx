@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { X, Send, Loader2, CheckCircle2, Sparkles } from 'lucide-react'
+import { X, Send, Loader2, CheckCircle2, Sparkles, Paperclip, FileText, Image as ImageIcon, FileType2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore } from '../state/store'
 import { loadAssistantConfig, type AnthropicMessage } from '../db/assistant'
 import { runAgent } from '../db/agent'
 import { describeAction, applyProposedAction, type ProposedAction } from '../db/assistantActions'
+import { readAttachment, buildUserContent, humanSize, type Attachment } from '../lib/attachments'
 import coin from '../assets/coin-512.png'
 
 /**
@@ -18,6 +19,8 @@ import coin from '../assets/coin-512.png'
 interface ChatMsg {
   role: 'user' | 'assistant'
   content: string
+  /** Files attached to this (user) turn, for display and for the API request. */
+  attachments?: Attachment[]
   /** Assistant-proposed actions awaiting approval. */
   actions?: ProposedAction[]
   /** A system note (e.g. "applied …"), styled centered/muted. */
@@ -31,11 +34,31 @@ export default function AssistantWidget() {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [checked, setChecked] = useState<Record<number, Set<number>>>({})
   const [appliedAt, setAppliedAt] = useState<Record<number, string[]>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  async function addFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    setError(null)
+    for (const f of Array.from(files)) {
+      try {
+        const a = await readAttachment(f)
+        setAttachments((prev) => [...prev, a])
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    }
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  function removeAttachment(i: number) {
+    setAttachments((prev) => prev.filter((_, k) => k !== i))
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -45,16 +68,22 @@ export default function AssistantWidget() {
 
   async function send() {
     const q = input.trim()
-    if (!q || busy) return
+    if ((!q && attachments.length === 0) || busy) return
     const config = loadAssistantConfig()
     if (!config.apiKey.trim()) { setError('Add your Anthropic API key in Settings → AI assistant first.'); return }
     setError(null)
     setBusy(true)
-    const next = [...messages, { role: 'user' as const, content: q }]
+    const atts = attachments
+    const next = [...messages, { role: 'user' as const, content: q, attachments: atts.length ? atts : undefined }]
     setMessages(next)
     setInput('')
+    setAttachments([])
     try {
-      const history: AnthropicMessage[] = next.map((m) => ({ role: m.role, content: m.content }))
+      const history: AnthropicMessage[] = next.map((m) =>
+        m.role === 'user' && m.attachments && m.attachments.length
+          ? { role: m.role, content: buildUserContent(m.content, m.attachments) }
+          : { role: m.role, content: m.content },
+      )
       const reply = await runAgent(history, config)
       setMessages((m) => {
         const idx = m.length
@@ -130,12 +159,23 @@ export default function AssistantWidget() {
           return (
             <div key={i} className={clsx('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
               <div className={clsx('max-w-[88%] space-y-2', m.role === 'user' ? '' : 'w-full')}>
-                <div className={clsx(
-                  'whitespace-pre-wrap rounded-lg px-3 py-2 text-sm',
-                  m.role === 'user' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700',
-                )}>
-                  {m.content}
-                </div>
+                {m.attachments && m.attachments.length > 0 && (
+                  <div className={clsx('flex flex-wrap gap-1', m.role === 'user' ? 'justify-end' : '')}>
+                    {m.attachments.map((a, k) => (
+                      <span key={k} className="inline-flex items-center gap-1 rounded-md bg-brand-100 px-2 py-1 text-[11px] font-medium text-brand-700">
+                        <AttachIcon kind={a.kind} /> {a.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {m.content && (
+                  <div className={clsx(
+                    'whitespace-pre-wrap rounded-lg px-3 py-2 text-sm',
+                    m.role === 'user' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700',
+                  )}>
+                    {m.content}
+                  </div>
+                )}
                 {m.actions && (
                   <ActionBlock
                     actions={m.actions}
@@ -164,28 +204,62 @@ export default function AssistantWidget() {
       </div>
 
       <div className="border-t border-slate-100 p-2">
+        {attachments.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {attachments.map((a, i) => (
+              <span key={i} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                <AttachIcon kind={a.kind} />
+                <span className="max-w-[9rem] truncate">{a.name}</span>
+                <span className="text-slate-400">{humanSize(a.size)}</span>
+                <button className="ml-0.5 text-slate-400 hover:text-rose-600" title="Remove" onClick={() => removeAttachment(i)}><X size={12} /></button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept=".pdf,.csv,.tsv,.txt,.json,.md,.log,.qbo,.iif,image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*"
+            className="hidden"
+            onChange={(e) => void addFiles(e.target.files)}
+          />
+          <button
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 disabled:opacity-40"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+            title="Attach a file (PDF, image, or CSV)"
+          >
+            <Paperclip size={16} />
+          </button>
           <textarea
             className="max-h-28 flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
             rows={1}
-            placeholder="Ask or tell me what to fix…"
+            placeholder="Ask, attach a report, or tell me what to fix…"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }}
           />
           <button
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-600 text-white transition hover:bg-brand-700 disabled:opacity-40"
-            disabled={busy || !input.trim()}
+            disabled={busy || (!input.trim() && attachments.length === 0)}
             onClick={() => void send()}
             title="Send"
           >
             <Send size={16} />
           </button>
         </div>
-        <p className="mt-1 px-1 text-[10px] text-slate-400">Proposals apply only when you approve. Every change is balanced, logged, and reversible.</p>
+        <p className="mt-1 px-1 text-[10px] text-slate-400">Attach the old QBO report (PDF, screenshot, or CSV) and I'll compare it to your books. Proposals apply only when you approve.</p>
       </div>
     </div>
   )
+}
+
+function AttachIcon({ kind }: { kind: Attachment['kind'] }) {
+  if (kind === 'image') return <ImageIcon size={12} className="shrink-0" />
+  if (kind === 'pdf') return <FileType2 size={12} className="shrink-0" />
+  return <FileText size={12} className="shrink-0" />
 }
 
 function ActionBlock({ actions, checked, applied, onToggle, onApply }: {
