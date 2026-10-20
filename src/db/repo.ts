@@ -187,7 +187,7 @@ export function setAccountArchived(id: number, archived: boolean): void {
  */
 export function updateAccount(
   id: number,
-  patch: { code?: string; name?: string; type?: AccountType; is_bank?: boolean },
+  patch: { code?: string; name?: string; type?: AccountType; is_bank?: boolean; interco_counterparty?: string | null },
 ): void {
   const a = getAccount(id)
   if (!a) throw new Error('Account not found.')
@@ -195,6 +195,10 @@ export function updateAccount(
   const name = patch.name?.trim() ?? a.name
   const type = patch.type ?? a.type
   const isBank = patch.is_bank ?? a.is_bank === 1
+  // undefined = leave as-is; '' / null = clear the tag; otherwise set it.
+  const cp = patch.interco_counterparty === undefined
+    ? (a.interco_counterparty ?? null)
+    : (patch.interco_counterparty?.trim() || null)
   if (!code) throw new Error('Account number is required.')
   if (!name) throw new Error('Account name is required.')
   if (code !== a.code) {
@@ -206,13 +210,14 @@ export function updateAccount(
   }
   const normal = normalBalanceFor(type)
   tx(() => {
-    run('UPDATE accounts SET code = ?, name = ?, type = ?, normal_balance = ?, is_bank = ? WHERE id = ?', [
-      code, name, type, normal, isBank ? 1 : 0, id,
+    run('UPDATE accounts SET code = ?, name = ?, type = ?, normal_balance = ?, is_bank = ?, interco_counterparty = ? WHERE id = ?', [
+      code, name, type, normal, isBank ? 1 : 0, cp, id,
     ])
     const changes: string[] = []
     if (code !== a.code) changes.push(`# ${a.code}→${code}`)
     if (name !== a.name) changes.push(`name “${a.name}”→“${name}”`)
     if (type !== a.type) changes.push(`type ${a.type}→${type}`)
+    if ((a.interco_counterparty ?? null) !== cp) changes.push(`counterparty ${a.interco_counterparty ?? '—'}→${cp ?? '—'}`)
     audit(a.company_id, 'update', 'account', id, `Edited account ${code} ${name}${changes.length ? ` (${changes.join(', ')})` : ''}`)
   })
 }

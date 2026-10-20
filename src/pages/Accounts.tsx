@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Landmark, X, ChevronRight, Pencil, Wand2 } from 'lucide-react'
 import { useStore, useCan } from '../state/store'
-import { getAccounts, displayBalance, createAccount, generalLedger, getAccount, updateAccount, mergeAccounts } from '../db/repo'
+import { getAccounts, displayBalance, createAccount, generalLedger, getAccount, updateAccount, mergeAccounts, listCompanies } from '../db/repo'
 import type { Account, AccountType, NormalBalance } from '../db/types'
 import { Money } from '../components/Money'
 import { formatDate } from '../lib/format'
@@ -137,16 +137,21 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
   const [name, setName] = useState(acct?.name ?? '')
   const [type, setType] = useState<AccountType>(acct?.type ?? 'expense')
   const [isBank, setIsBank] = useState(acct?.is_bank === 1)
+  const [cp, setCp] = useState<string>(acct?.interco_counterparty ?? '')
   const [mergeTarget, setMergeTarget] = useState<number | ''>('')
   const [err, setErr] = useState<string | null>(null)
 
   const others = getAccounts(companyId).filter((a) => a.id !== id)
+  // Other companies with an inter-company code set — the valid counterparties.
+  const counterparties = listCompanies()
+    .filter((c) => c.id !== companyId && c.interco_code?.trim())
+    .map((c) => ({ code: c.interco_code!.trim(), name: c.name }))
   if (!acct) return null
 
   function save() {
     setErr(null)
     try {
-      updateAccount(id, { code, name, type, is_bank: isBank })
+      updateAccount(id, { code, name, type, is_bank: isBank, interco_counterparty: cp || null })
       onSaved()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -198,6 +203,17 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
             <input type="checkbox" checked={isBank} onChange={(e) => setIsBank(e.target.checked)} /> Bank / cash account
           </label>
         </div>
+        {(counterparties.length > 0 || cp) && (
+          <label className="block text-sm">
+            <span className="mb-1 block text-xs font-medium text-muted">Inter-company counterparty</span>
+            <select className="input w-full text-sm" value={cp} onChange={(e) => setCp(e.target.value)}>
+              <option value="">— none (not an inter-company account) —</option>
+              {counterparties.map((c) => <option key={c.code} value={c.code}>{c.name} ({c.code})</option>)}
+              {cp && !counterparties.some((c) => c.code === cp) && <option value={cp}>{cp}</option>}
+            </select>
+            <span className="mt-1 block text-[11px] text-subtle">Tag a “Due to/from” account to the other company so it ties out against that company’s matching account.</span>
+          </label>
+        )}
         <div className="flex items-center gap-2">
           <button className="btn-primary" onClick={save}>Save changes</button>
           <button className="btn-ghost text-sm" onClick={onClose}>Cancel</button>
