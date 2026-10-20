@@ -326,7 +326,6 @@ export default function App() {
         </Routes>
       </main>
       <AssistantWidget />
-      <DevUpdateButton />
     </div>
   )
 }
@@ -371,19 +370,39 @@ function UserFooter({ rail }: { rail?: boolean }) {
         </button>
       </div>
       <BuildStamp />
+      <DevUpdateButton />
     </div>
   )
 }
 
 /** Small git build stamp so a refresh is self-verifying: match this against the
- *  commit Claude says is latest. Baked in at build / dev-server start. */
+ *  commit Claude says is latest. In the desktop app it reads the REAL checked-out
+ *  commit at runtime (via the current_rev command), because the build-time stamp
+ *  freezes at dev-server start and lies after the code is pulled underneath a
+ *  running Vite server. Falls back to the baked-in stamp when runtime git isn't
+ *  available (e.g. the browser dev build). */
 function BuildStamp() {
-  const rev = typeof __BUILD_REV__ === 'string' ? __BUILD_REV__ : 'unknown'
-  const time = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : ''
+  const bakedRev = typeof __BUILD_REV__ === 'string' ? __BUILD_REV__ : 'unknown'
+  const bakedTime = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : ''
+  const [live, setLive] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const { isTauri } = await import('./lib/desktop')
+        if (!isTauri()) return
+        const { invoke } = await import('@tauri-apps/api/core')
+        const rev = await invoke<string>('current_rev')
+        if (!cancelled && typeof rev === 'string' && rev.trim()) setLive(rev.trim())
+      } catch { /* fall back to the baked stamp */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   return (
-    <div className="mt-3 select-text text-[11px] text-subtle" title="Code version currently running">
-      build <span className="font-mono text-nav-text">{rev}</span>
-      {time ? ` · ${time}` : ''}
+    <div className="mt-3 select-text text-[11px] text-subtle" title="Code version currently checked out">
+      build <span className="font-mono text-nav-text">{live ?? `${bakedRev}${bakedTime ? ` · ${bakedTime}` : ''}`}</span>
     </div>
   )
 }

@@ -1,36 +1,64 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Dev-only: run `git pull --ff-only` in the repo so the running `tauri dev`
-/// instance picks up the latest web code via Vite's hot reload. Returns git's
-/// output. In a release build it refuses (there's no checkout to pull), and the
-/// UI only shows the button in the dev build anyway.
-///
-/// Note: this updates the web layer (TS/React), which Vite reloads live. Changes
-/// to the Rust/native side still need a full rebuild (refresh.cmd / tauri dev
-/// restart) to take effect.
-#[tauri::command]
-pub fn dev_update() -> Result<String, String> {
-    if !cfg!(debug_assertions) {
-        return Err("Update is only available in the dev build.".into());
-    }
-    // Repo root = the parent of the src-tauri crate directory. CARGO_MANIFEST_DIR
-    // is baked at compile time and points at the checkout on the dev machine.
+/// Repo root = the parent of the src-tauri crate directory. CARGO_MANIFEST_DIR
+/// is baked at compile time and points at the checkout on the dev machine.
+fn repo_root() -> Result<PathBuf, String> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo = manifest
+    manifest
         .parent()
-        .ok_or_else(|| "could not locate the repository root".to_string())?;
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "could not locate the repository root".to_string())
+}
 
+fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
-        .args(["pull", "--ff-only"])
+        .args(args)
         .current_dir(repo)
         .output()
         .map_err(|e| format!("failed to run git (is it on PATH?): {e}"))?;
-
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
-        return Err(format!("git pull failed:\n{stdout}{stderr}").trim().to_string());
+        return Err(format!("{stdout}{stderr}").trim().to_string());
     }
     Ok(format!("{stdout}{stderr}").trim().to_string())
+}
+
+/// The currently checked-out commit: "shorthash · YYYY-MM-DD HH:MM · subject".
+/// Read at runtime, so it reflects what git actually has right now — unlike the
+/// build-time stamp, which freezes at dev-server start and never changes when
+/// the code is pulled underneath a running Vite server.
+#[tauri::command]
+pub fn current_rev() -> Result<String, String> {
+    let repo = repo_root()?;
+    git(&repo, &["log", "-1", "--format=%h \u{00b7} %cd \u{00b7} %s", "--date=format:%Y-%m-%d %H:%M"])
+}
+
+/// Update the checkout to the latest remote code.
+///
+/// `force = false`: `git pull --ff-only` — safe, but refuses if the local
+/// checkout has diverged or has local commits.
+/// `force = true`: `git fetch` then `git reset --hard @{u}` — discards local
+/// changes and matches the remote exactly. This is what unblocks the common
+/// case where a stray local change or a diverged history made --ff-only fail
+/// silently, leaving the app stuck on an old build.
+///
+/// Returns the git output plus the resulting HEAD, so the UI can show exactly
+/// which commit is now checked out. In `tauri dev` Vite hot-reloads the pulled
+/// web code; native/Rust changes still need a full `tauri dev` restart.
+#[tauri::command]
+pub fn dev_update(force: Option<bool>) -> Result<String, String> {
+    let repo = repo_root()?;
+    let op = if force.unwrap_or(false) {
+        git(&repo, &["fetch", "--all", "--prune"])
+            .and_then(|f| git(&repo, &["reset", "--hard", "@{u}"]).map(|r| format!("{f}\n{r}")))
+            .map_err(|e| format!("force update failed:\n{e}"))?
+    } else {
+        git(&repo, &["pull", "--ff-only"]).map_err(|e| {
+            format!("git pull failed (the checkout may have local changes or have diverged — try Force to latest):\n{e}")
+        })?
+    };
+    let head = git(&repo, &["log", "-1", "--format=%h %s"]).unwrap_or_default();
+    Ok(format!("{op}\nHEAD now at {head}").trim().to_string())
 }

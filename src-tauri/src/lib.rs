@@ -17,7 +17,8 @@ pub fn run() {
       qbo::qbo_oauth,
       qbo::qbo_oauth_refresh,
       qbo::qbo_api,
-      dev::dev_update
+      dev::dev_update,
+      dev::current_rev
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

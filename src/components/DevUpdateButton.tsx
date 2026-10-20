@@ -1,56 +1,71 @@
 import { useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, AlertTriangle } from 'lucide-react'
 import { isTauri } from '../lib/desktop'
 
 /**
- * Dev-only "Update to latest" button. Visible only in the Vite dev build
- * running inside Tauri. Calls the `dev_update` Rust command (git pull), then
- * reloads so the just-pulled web code is active — Vite serves the new files
- * immediately, so there's no rebuild for TS/React changes. Native/Rust changes
- * still need a full refresh.
+ * "Update to latest" — a permanent fixture in the sidebar footer (desktop app
+ * only). Pulls the newest web code and reloads so Vite serves it.
+ *
+ * The plain update is `git pull --ff-only`, which refuses (and does nothing) if
+ * the local checkout has diverged or has stray changes — the failure mode that
+ * silently stranded the app on an old build. When that happens we surface the
+ * error and offer "Force to latest" (git fetch + reset --hard), which discards
+ * local changes and matches the remote exactly.
+ *
+ * Native/Rust changes still need a full `tauri dev` restart to take effect; the
+ * web layer (TS/React) reloads live.
  */
 export default function DevUpdateButton() {
-  const enabled = import.meta.env.DEV && isTauri()
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
 
-  if (!enabled) return null
+  if (!isTauri()) return null
 
-  async function update() {
+  async function run(force: boolean) {
     setBusy(true)
-    setMsg(null)
+    setMsg(force ? 'Forcing to latest…' : 'Checking for updates…')
+    setFailed(false)
     try {
       const { invoke } = await import('@tauri-apps/api/core')
-      const out = await invoke<string>('dev_update')
+      const out = await invoke<string>('dev_update', { force })
       const upToDate = /already up to date/i.test(out)
-      setMsg(upToDate ? 'Already up to date.' : 'Updated — reloading…')
-      if (!upToDate) {
-        // Give the latest code a moment, then reload to pick it up.
-        setTimeout(() => location.reload(), 700)
-      }
+      setMsg(upToDate ? 'Already up to date.' : `${out}\n\nReloading…`)
+      if (!upToDate) setTimeout(() => location.reload(), 900)
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e))
+      setFailed(true)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="fixed bottom-3 left-3 z-50 flex flex-col items-start gap-1">
-      {msg && (
-        <div className="max-w-xs whitespace-pre-wrap rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 shadow">
-          {msg}
-        </div>
-      )}
+    <div className="mt-3 space-y-1.5">
       <button
-        onClick={update}
+        onClick={() => void run(false)}
         disabled={busy}
-        title="Dev only: git pull + reload the web app"
-        className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-slate-900 disabled:opacity-60"
+        title="git pull + reload the web app"
+        className="flex w-full items-center justify-center gap-1.5 rounded-nav border border-nav-line bg-nav-input px-3 py-1.5 text-xs font-medium text-nav-text hover:bg-nav-active disabled:opacity-60"
       >
         <RefreshCw size={13} className={busy ? 'animate-spin' : ''} />
         {busy ? 'Updating…' : 'Update to latest'}
       </button>
+      {failed && (
+        <button
+          onClick={() => void run(true)}
+          disabled={busy}
+          title="Discard local changes and match the remote exactly"
+          className="flex w-full items-center justify-center gap-1.5 rounded-nav border border-amber-500/60 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20 disabled:opacity-60"
+        >
+          <AlertTriangle size={13} /> Force to latest (discard local changes)
+        </button>
+      )}
+      {msg && (
+        <div className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-nav bg-nav-input px-2.5 py-1.5 font-mono text-[10px] leading-snug text-subtle">
+          {msg}
+        </div>
+      )}
     </div>
   )
 }
