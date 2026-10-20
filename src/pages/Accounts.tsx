@@ -132,6 +132,7 @@ export default function Accounts() {
 }
 
 function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: number; id: number; onClose: () => void; onSaved: () => void }) {
+  const refreshAfter = useStore((s) => s.refresh)
   const acct = getAccount(id)
   const [code, setCode] = useState(acct?.code ?? '')
   const [name, setName] = useState(acct?.name ?? '')
@@ -140,6 +141,7 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
   const [cp, setCp] = useState<string>(acct?.interco_counterparty ?? '')
   const [mergeTarget, setMergeTarget] = useState<number | ''>('')
   const [confirmingMerge, setConfirmingMerge] = useState(false)
+  const [mergeDone, setMergeDone] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   const others = getAccounts(companyId).filter((a) => a.id !== id)
@@ -165,8 +167,10 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
     if (!target) return
     setErr(null)
     try {
-      mergeAccounts(id, Number(mergeTarget))
-      onSaved()
+      const moved = mergeAccounts(id, Number(mergeTarget))
+      setConfirmingMerge(false)
+      setMergeDone(`Merged ${moved} transaction line${moved === 1 ? '' : 's'} into ${target.code} ${target.name}. This account is now archived.`)
+      refreshAfter()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setConfirmingMerge(false)
@@ -182,6 +186,12 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
         </div>
 
         {err && <div className="rounded-control bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+        {mergeDone && (
+          <div className="space-y-2 rounded-control bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <div>{mergeDone}</div>
+            <button className="btn-primary px-3 py-1 text-sm" onClick={onSaved}>Done</button>
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-3">
           <label className="text-sm">
