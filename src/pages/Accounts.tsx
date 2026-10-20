@@ -139,6 +139,7 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
   const [isBank, setIsBank] = useState(acct?.is_bank === 1)
   const [cp, setCp] = useState<string>(acct?.interco_counterparty ?? '')
   const [mergeTarget, setMergeTarget] = useState<number | ''>('')
+  const [confirmingMerge, setConfirmingMerge] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const others = getAccounts(companyId).filter((a) => a.id !== id)
@@ -162,13 +163,13 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
     if (mergeTarget === '') return
     const target = others.find((a) => a.id === mergeTarget)
     if (!target) return
-    if (!window.confirm(`Move every transaction from “${acct!.code} ${acct!.name}” into “${target.code} ${target.name}” and archive this account? This is reversible from the audit log but affects reports.`)) return
     setErr(null)
     try {
       mergeAccounts(id, Number(mergeTarget))
       onSaved()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
+      setConfirmingMerge(false)
     }
   }
 
@@ -223,12 +224,29 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-subtle">Merge / consolidate</div>
           <p className="mb-2 text-xs text-muted">Move all of this account’s transactions into another account, then archive this one. Use it to combine duplicates (e.g. several “Chris” loan accounts).</p>
           <div className="flex items-center gap-2">
-            <select className="input flex-1 text-sm" value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value === '' ? '' : Number(e.target.value))}>
+            <select
+              className="input flex-1 text-sm"
+              value={mergeTarget}
+              onChange={(e) => { setMergeTarget(e.target.value === '' ? '' : Number(e.target.value)); setConfirmingMerge(false) }}
+            >
               <option value="">Merge into…</option>
               {others.map((a) => <option key={a.id} value={a.id}>{a.code} {a.name} ({a.type})</option>)}
             </select>
-            <button className="btn-ghost text-sm text-rose-600 disabled:text-slate-300" disabled={mergeTarget === ''} onClick={doMerge}>Merge</button>
+            {confirmingMerge ? (
+              <>
+                <button className="btn-primary bg-rose-600 px-2 py-1 text-sm hover:bg-rose-700" onClick={doMerge}>Confirm</button>
+                <button className="btn-ghost text-sm" onClick={() => setConfirmingMerge(false)}>Cancel</button>
+              </>
+            ) : (
+              <button className="btn-ghost text-sm text-rose-600 disabled:text-slate-300" disabled={mergeTarget === ''} onClick={() => setConfirmingMerge(true)}>Merge</button>
+            )}
           </div>
+          {confirmingMerge && mergeTarget !== '' && (
+            <p className="mt-2 rounded-control bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Move every transaction from <span className="font-medium">{acct!.code} {acct!.name}</span> into{' '}
+              <span className="font-medium">{others.find((a) => a.id === mergeTarget)?.code} {others.find((a) => a.id === mergeTarget)?.name}</span>, then archive this account? Reversible from the audit log.
+            </p>
+          )}
         </div>
       </div>
     </div>
