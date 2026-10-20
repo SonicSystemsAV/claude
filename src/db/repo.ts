@@ -1068,6 +1068,59 @@ export function trialBalanceRange(companyId: number, start?: string, end?: strin
   return getAccounts(companyId, true).map((account) => ({ account, net: bal.get(account.id) ?? 0 }))
 }
 
+export interface ContactBalance {
+  contactId: number | null
+  contactName: string
+  /** Signed net in cents, debit-positive. */
+  net: number
+}
+export interface SubledgerAccount {
+  account: Account
+  total: number
+  contacts: ContactBalance[]
+}
+export interface Subledger {
+  receivable: SubledgerAccount[]
+  payable: SubledgerAccount[]
+}
+
+/**
+ * Break the A/R and A/P control accounts down by contact (customer / supplier),
+ * optionally as of a date. This is the sub-ledger QuickBooks shows as a
+ * customer/vendor balance and that a flat journal import loses: a receivable
+ * account whose GL total is right can still hide large offsetting per-contact
+ * balances when invoices and payments were never applied to each other. A
+ * wrong-sign contact balance (a credit sitting in A/R, or a debit in A/P) is
+ * the tell-tale of an unapplied payment.
+ */
+export function subledgerByContact(companyId: number, asOf?: string): Subledger {
+  const accts = getAccounts(companyId, true)
+  const build = (list: Account[]): SubledgerAccount[] =>
+    list
+      .map((a) => {
+        const params: unknown[] = [a.id]
+        let where = "e.account_id = ? AND t.status != 'void' AND t.deleted = 0"
+        if (asOf) { where += ' AND t.date <= ?'; params.push(asOf) }
+        const rows = all<{ cid: number | null; name: string | null; bal: number }>(
+          `SELECT t.contact_id AS cid, c.name AS name, COALESCE(SUM(e.amount_cents), 0) AS bal
+           FROM entries e JOIN transactions t ON t.id = e.transaction_id
+           LEFT JOIN contacts c ON c.id = t.contact_id
+           WHERE ${where} GROUP BY t.contact_id`,
+          params,
+        )
+        const contacts: ContactBalance[] = rows
+          .map((r) => ({ contactId: r.cid, contactName: (r.name ?? '').trim() || '(no name)', net: r.bal }))
+          .filter((r) => r.net !== 0)
+          .sort((x, y) => Math.abs(y.net) - Math.abs(x.net))
+        return { account: a, total: contacts.reduce((s, r) => s + r.net, 0), contacts }
+      })
+      .filter((sa) => sa.contacts.length > 0)
+  return {
+    receivable: build(accts.filter((a) => a.type === 'asset' && /receivable/i.test(a.name))),
+    payable: build(accts.filter((a) => a.type === 'liability' && /payable/i.test(a.name))),
+  }
+}
+
 export interface GstHstReturn {
   taxAccounts: Account[]
   line101_revenue: number

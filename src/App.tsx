@@ -44,6 +44,7 @@ import Items from './pages/Items'
 import Sales from './pages/Sales'
 import Purchases from './pages/Purchases'
 import Reports from './pages/Reports'
+import Subledger from './pages/Subledger'
 import Tax from './pages/Tax'
 import Audit from './pages/Audit'
 import RecycleBin from './pages/RecycleBin'
@@ -89,6 +90,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     label: 'Reports',
     items: [
       { to: '/reports', label: 'Reports', icon: BarChart3 },
+      { to: '/subledger', label: 'A/R & A/P by Contact', icon: Users },
       { to: '/tax', label: 'Tax', icon: Calculator },
     ],
   },
@@ -315,6 +317,7 @@ export default function App() {
             <Route path="/contacts" element={<Contacts />} />
             <Route path="/items" element={<Items />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/subledger" element={<Subledger />} />
             <Route path="/tax" element={<Tax />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/trash" element={<RecycleBin />} />
