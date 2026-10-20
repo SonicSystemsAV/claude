@@ -14,6 +14,7 @@ import {
   Calculator,
   History,
   BadgeCheck,
+  FileCheck2,
   Building2,
   ArrowLeftRight,
   ShieldCheck,
@@ -33,6 +34,7 @@ import Companies from './pages/Companies'
 import TransferReview from './pages/TransferReview'
 import ReviewCenter from './pages/ReviewCenter'
 import Reconcile from './pages/Reconcile'
+import ReconcileTB from './pages/ReconcileTB'
 import StatementRec from './pages/StatementRec'
 import Accounts from './pages/Accounts'
 import StandardizeChart from './pages/StandardizeChart'
@@ -70,6 +72,7 @@ const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
       { to: '/sales', label: 'Sales', icon: Receipt },
       { to: '/purchases', label: 'Purchases', icon: ShoppingCart },
       { to: '/reconcile', label: 'Reconcile', icon: Scale },
+      { to: '/reconcile-tb', label: 'Verify vs QBO', icon: FileCheck2 },
       { to: '/statements', label: 'Statement Rec', icon: BadgeCheck },
       { to: '/transactions', label: 'All Transactions', icon: ListChecks },
     ],
@@ -304,6 +307,7 @@ export default function App() {
             <Route path="/sales" element={<Sales />} />
             <Route path="/purchases" element={<Purchases />} />
             <Route path="/reconcile" element={<Reconcile />} />
+            <Route path="/reconcile-tb" element={<ReconcileTB />} />
             <Route path="/statements" element={<StatementRec />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/accounts/standardize" element={<StandardizeChart />} />

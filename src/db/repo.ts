@@ -1047,6 +1047,27 @@ export function trialBalanceAsOf(companyId: number, asOf?: string): TrialBalance
     .filter((r) => r.debit !== 0 || r.credit !== 0)
 }
 
+export interface TrialBalanceAcct {
+  account: Account
+  /** Signed net balance in cents: debit-positive (> 0 debit, < 0 credit). */
+  net: number
+}
+
+/**
+ * Trial balance over an optional date window (by transaction date), one row per
+ * account, signed debit-positive — the raw material for reconciling the app's
+ * books against an external (e.g. QuickBooks) trial balance. Unlike
+ * trialBalance / trialBalanceAsOf this keeps zero-balance accounts so a line
+ * that is nonzero in the external report but zero here still has something to
+ * match against. Leave start/end undefined for an all-time balance.
+ */
+export function trialBalanceRange(companyId: number, start?: string, end?: string): TrialBalanceAcct[] {
+  const bal = accountBalances(companyId, start, end)
+  // Include archived accounts — an archived account can still carry a balance
+  // that an external trial balance reports, and hiding it would fake a tie-out.
+  return getAccounts(companyId, true).map((account) => ({ account, net: bal.get(account.id) ?? 0 }))
+}
+
 export interface GstHstReturn {
   taxAccounts: Account[]
   line101_revenue: number
