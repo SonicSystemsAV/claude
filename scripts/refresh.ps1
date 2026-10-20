@@ -25,7 +25,15 @@ Set-Location -Path $repo
 Write-Host "Repo: $repo" -ForegroundColor DarkGray
 
 Write-Host "`n[1/4] Pulling latest code..." -ForegroundColor Cyan
-git pull
+# Force the checkout to match the remote exactly. A plain 'git pull' refuses when
+# the local checkout has diverged or carries stray changes, which silently
+# stranded the app on an old build. This discards local CODE changes only - your
+# .sonicledger book file lives in Documents and is never touched.
+git fetch origin
+$branch = (git rev-parse --abbrev-ref HEAD).Trim()
+if (-not $branch -or $branch -eq 'HEAD') { $branch = 'main' }
+git reset --hard "origin/$branch"
+Write-Host ("Now at: " + (git log -1 --format='%h %s')) -ForegroundColor DarkGray
 
 Write-Host "`n[2/4] Installing dependencies..." -ForegroundColor Cyan
 npm install
