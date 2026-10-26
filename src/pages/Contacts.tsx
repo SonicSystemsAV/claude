@@ -1,14 +1,15 @@
 import { useState } from 'react'
-import { Users, UserRound, Truck, SlidersHorizontal, Check, Plus, ArrowLeft, Pencil, Trash2, Mail, Phone, Globe, MapPin, ExternalLink, Printer } from 'lucide-react'
+import { Users, UserRound, Truck, SlidersHorizontal, Check, Plus, ArrowLeft, Pencil, Trash2, Mail, Phone, Globe, MapPin, Printer } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useStore, useCan } from '../state/store'
 import { contactSummaries, getContact, getTransactions, softDeleteTransactions, type ContactSummary } from '../db/repo'
-import { openDocuments, getDocumentForEdit, getDocumentByTxnId, type DocumentEditData } from '../db/documents'
+import { openDocuments, getDocumentForEdit, type DocumentEditData } from '../db/documents'
 import { printStatement } from '../db/documentPrint'
 import type { Contact, ContactKind, DocType } from '../db/types'
 import { Money } from '../components/Money'
 import { ContactForm } from '../components/ContactForm'
 import { DocumentForm } from '../components/DocumentForm'
+import { useTransactionOpener } from '../components/useTransactionOpener'
 import { useSort } from '../lib/useSort'
 import ExportButtons, { SortTh } from '../components/ExportButtons'
 import type { ExportTable } from '../lib/exporters'
@@ -210,6 +211,7 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
   const [editDoc, setEditDoc] = useState<DocumentEditData | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [note, setNote] = useState<string | null>(null)
+  const { openTransaction, element: openerEl } = useTransactionOpener(companyId, refresh)
   const [showStmt, setShowStmt] = useState(false)
   const [stmtStart, setStmtStart] = useState(`${new Date().getFullYear()}-01-01`)
   const [stmtEnd, setStmtEnd] = useState(todayISO())
@@ -242,14 +244,6 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
     const n = softDeleteTransactions(companyId, [...selected])
     setSelected(new Set()); setNote(`Moved ${n} transaction(s) to the Recycle Bin.`); refresh()
   }
-  function openTxn(txnId: number) {
-    const doc = getDocumentByTxnId(txnId)
-    if (doc && EDITABLE.includes(doc.type) && doc.status !== 'void') {
-      const d = getDocumentForEdit(doc.id)
-      if (d) setEditDoc(d)
-    }
-  }
-
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-6">
       <button className="btn-ghost text-slate-500" onClick={onBack}><ArrowLeft size={15} /> All contacts</button>
@@ -387,19 +381,22 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
               {txns.length === 0 && <tr><td colSpan={6} className="px-5 py-8 text-center text-slate-400">No transactions for this contact yet.</td></tr>}
               {txns.map((t) => {
                 const total = t.entries.filter((e) => e.amount_cents > 0).reduce((s, e) => s + e.amount_cents, 0)
-                const doc = getDocumentByTxnId(t.id)
-                const openable = doc && EDITABLE.includes(doc.type) && doc.status !== 'void'
                 return (
-                  <tr key={t.id} className={clsx('border-b border-slate-50 last:border-0 hover:bg-slate-50', selected.has(t.id) && 'bg-amber-50/50')}>
+                  <tr
+                    key={t.id}
+                    className={clsx('group cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50', selected.has(t.id) && 'bg-amber-50/50')}
+                    onClick={() => openTransaction(t.id)}
+                    title="Open / edit this transaction"
+                  >
                     {canDelete && (
-                      <td className="px-3 py-2.5"><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} /></td>
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} /></td>
                     )}
                     <td className="px-2 py-2.5 whitespace-nowrap text-slate-500">{formatDate(t.date)}</td>
                     <td className="px-2 py-2.5 text-slate-800">{t.memo}</td>
                     <td className="px-2 py-2.5"><span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">{t.source}</span></td>
                     <td className="px-5 py-2.5 text-right"><Money cents={total} /></td>
                     <td className="px-3 py-2.5 text-right">
-                      {openable && <button className="text-slate-300 hover:text-brand-600" title="Open" onClick={() => openTxn(t.id)}><ExternalLink size={15} /></button>}
+                      <Pencil size={14} className="text-slate-300 opacity-0 transition group-hover:opacity-100" />
                     </td>
                   </tr>
                 )
@@ -424,6 +421,7 @@ function ContactDetail({ companyId, id, onBack }: { companyId: number; id: numbe
           onSaved={refresh}
         />
       )}
+      {openerEl}
     </div>
   )
 }

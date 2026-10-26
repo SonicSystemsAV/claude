@@ -7,6 +7,7 @@ import type { Account, AccountType, NormalBalance } from '../db/types'
 import { Money } from '../components/Money'
 import { useSort } from '../lib/useSort'
 import ExportButtons, { SortTh } from '../components/ExportButtons'
+import { useTransactionOpener } from '../components/useTransactionOpener'
 import type { ExportTable } from '../lib/exporters'
 import { formatDate } from '../lib/format'
 
@@ -294,8 +295,11 @@ function EditAccountModal({ companyId, id, onClose, onSaved }: { companyId: numb
 
 function AccountRegister({ companyId, accountId, onClose }: { companyId: number; accountId: number; onClose: () => void }) {
   const account = getAccount(accountId)
+  const refresh = useStore((s) => s.refresh)
+  const rev = useStore((s) => s.rev)
   const [q, setQ] = useState('')
-  const ledger = useMemo(() => generalLedger(companyId, accountId), [companyId, accountId])
+  const ledger = useMemo(() => generalLedger(companyId, accountId), [companyId, accountId, rev])
+  const { openTransaction, element: openerEl } = useTransactionOpener(companyId, refresh)
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -311,6 +315,7 @@ function AccountRegister({ companyId, accountId, onClose }: { companyId: number;
   if (!account) return null
 
   return (
+    <>
     <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="flex h-full w-full max-w-3xl flex-col bg-surface shadow-xl"
@@ -360,7 +365,12 @@ function AccountRegister({ companyId, accountId, onClose }: { companyId: number;
               </thead>
               <tbody>
                 {rows.map((r, i) => (
-                  <tr key={i} className="border-b border-rule/60 last:border-0 align-top">
+                  <tr
+                    key={i}
+                    className="group cursor-pointer border-b border-rule/60 last:border-0 align-top hover:bg-orange-50/50"
+                    onClick={() => openTransaction(r.transaction_id)}
+                    title="Open / edit this transaction"
+                  >
                     <td className="whitespace-nowrap px-5 py-2 text-muted">{formatDate(r.date)}</td>
                     <td className="px-2 py-2">
                       {r.contact_name && <div className="text-ink">{r.contact_name}</div>}
@@ -384,10 +394,12 @@ function AccountRegister({ companyId, accountId, onClose }: { companyId: number;
         </div>
 
         <div className="border-t border-rule px-5 py-2 text-[11px] text-subtle">
-          Amounts are signed (+ debit / − credit). Running balance is debit-positive, in account order.
+          Click any row to open or edit the transaction. Amounts are signed (+ debit / − credit); running balance is debit-positive, in account order.
         </div>
       </div>
     </div>
+    {openerEl}
+    </>
   )
 }
 

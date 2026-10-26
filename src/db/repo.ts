@@ -886,6 +886,7 @@ export function getAuditLog(companyId: number, limit = 500): AuditEntry[] {
 // ---- Detailed reports ------------------------------------------------------
 
 export interface LedgerRow {
+  transaction_id: number
   date: string
   memo: string | null
   reference: string | null
@@ -913,8 +914,8 @@ export function generalLedger(
   let where = "t.company_id = ? AND e.account_id = ? AND t.status != 'void' AND t.deleted = 0"
   if (start) { where += ' AND t.date >= ?'; params.push(start) }
   if (end) { where += ' AND t.date <= ?'; params.push(end) }
-  const raw = all<{ date: string; memo: string | null; reference: string | null; contact_name: string | null; amount_cents: number }>(
-    `SELECT t.date, t.memo, t.reference, c.name AS contact_name, e.amount_cents
+  const raw = all<{ transaction_id: number; date: string; memo: string | null; reference: string | null; contact_name: string | null; amount_cents: number }>(
+    `SELECT t.id AS transaction_id, t.date, t.memo, t.reference, c.name AS contact_name, e.amount_cents
      FROM entries e JOIN transactions t ON t.id = e.transaction_id
      LEFT JOIN contacts c ON c.id = t.contact_id
      WHERE ${where} ORDER BY t.date, t.id, e.id`,
