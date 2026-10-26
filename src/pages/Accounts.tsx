@@ -5,6 +5,9 @@ import { useStore, useCan } from '../state/store'
 import { getAccounts, displayBalance, createAccount, generalLedger, getAccount, updateAccount, mergeAccounts, listCompanies } from '../db/repo'
 import type { Account, AccountType, NormalBalance } from '../db/types'
 import { Money } from '../components/Money'
+import { useSort } from '../lib/useSort'
+import ExportButtons, { SortTh } from '../components/ExportButtons'
+import type { ExportTable } from '../lib/exporters'
 import { formatDate } from '../lib/format'
 
 const TYPE_ORDER: AccountType[] = ['asset', 'liability', 'equity', 'income', 'expense']
@@ -25,6 +28,7 @@ const DEFAULT_NORMAL: Record<AccountType, NormalBalance> = {
 
 export default function Accounts() {
   const companyId = useStore((s) => s.currentCompanyId)
+  const companies = useStore((s) => s.companies)
   const refresh = useStore((s) => s.refresh)
   const rev = useStore((s) => s.rev)
   const canEdit = useCan('edit')
@@ -32,28 +36,50 @@ export default function Accounts() {
   const [adding, setAdding] = useState(false)
   const [registerId, setRegisterId] = useState<number | null>(null)
   const [editId, setEditId] = useState<number | null>(null)
+
+  const accounts = companyId != null ? getAccounts(companyId) : []
+  const { sorted, sortKey, sortDir, toggle } = useSort<Account>(
+    accounts,
+    {
+      code: (a) => a.code,
+      name: (a) => a.name.toLowerCase(),
+      type: (a) => TYPE_LABEL[a.type],
+      balance: (a) => displayBalance(a),
+    },
+    { key: 'code', dir: 'asc' },
+  )
   if (companyId == null) return null
 
-  const accounts = getAccounts(companyId)
-  const byType = (t: AccountType) => accounts.filter((a) => a.type === t)
+  const company = companies.find((c) => c.id === companyId)
+  const safeName = (company?.name ?? 'company').replace(/[^a-z0-9]+/gi, '_')
+  const buildExport = (): ExportTable => ({
+    filename: `chart-of-accounts-${safeName}`,
+    title: `Chart of Accounts — ${company?.name ?? ''}`.trim(),
+    headers: ['Account #', 'Name', 'Type', 'Balance'],
+    align: ['left', 'left', 'left', 'right'],
+    rows: sorted.map((a) => [a.code, a.name, TYPE_LABEL[a.type], (displayBalance(a) / 100).toFixed(2)]),
+  })
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Chart of Accounts</h1>
           <p className="text-sm text-slate-500">{accounts.length} accounts</p>
         </div>
-        {canEdit && (
-          <div className="flex items-center gap-2">
-            <Link to="/accounts/standardize" className="btn-ghost flex items-center gap-1.5 text-sm">
-              <Wand2 size={15} /> Standardize
-            </Link>
-            <button className="btn-primary" onClick={() => setAdding((v) => !v)}>
-              <Plus size={16} /> New account
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <ExportButtons build={buildExport} />
+          {canEdit && (
+            <>
+              <Link to="/accounts/standardize" className="btn-ghost flex items-center gap-1.5 text-sm">
+                <Wand2 size={15} /> Standardize
+              </Link>
+              <button className="btn-primary" onClick={() => setAdding((v) => !v)}>
+                <Plus size={16} /> New account
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {adding && (
@@ -66,53 +92,51 @@ export default function Accounts() {
         />
       )}
 
-      <div className="space-y-5">
-        {TYPE_ORDER.map((type) => {
-          const list = byType(type)
-          if (list.length === 0) return null
-          return (
-            <div key={type} className="card overflow-hidden">
-              <div className="border-b border-slate-100 bg-slate-50 px-5 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {TYPE_LABEL[type]}
-              </div>
-              <table className="w-full text-sm">
-                <tbody>
-                  {list.map((a: Account) => (
-                    <tr
-                      key={a.id}
-                      className="group cursor-pointer border-b border-slate-50 last:border-0 hover:bg-orange-50/50"
-                      onClick={() => setRegisterId(a.id)}
-                      title="View transactions in this account"
-                    >
-                      <td className="w-16 px-5 py-2.5 font-mono text-xs text-slate-400">{a.code}</td>
-                      <td className="px-2 py-2.5 text-slate-800">
-                        <span className="inline-flex items-center gap-1.5">
-                          {a.is_bank === 1 && <Landmark size={14} className="text-brand-500" />}
-                          {a.name}
-                          {canEdit && (
-                            <button
-                              className="opacity-0 transition group-hover:opacity-100"
-                              title="Edit / renumber / merge"
-                              onClick={(e) => { e.stopPropagation(); setEditId(a.id) }}
-                            >
-                              <Pencil size={13} className="text-slate-400 hover:text-sonic-orange" />
-                            </button>
-                          )}
-                        </span>
-                      </td>
-                      <td className="px-5 py-2.5 text-right">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Money cents={displayBalance(a)} />
-                          <ChevronRight size={14} className="text-slate-300 group-hover:text-sonic-orange" />
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )
-        })}
+      <div className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs uppercase tracking-wide">
+            <tr>
+              <SortTh label="#" sortKey="code" active={sortKey === 'code'} dir={sortDir} onClick={toggle} />
+              <SortTh label="Name" sortKey="name" active={sortKey === 'name'} dir={sortDir} onClick={toggle} />
+              <SortTh label="Type" sortKey="type" active={sortKey === 'type'} dir={sortDir} onClick={toggle} />
+              <SortTh label="Balance" sortKey="balance" active={sortKey === 'balance'} dir={sortDir} onClick={toggle} align="right" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((a: Account) => (
+              <tr
+                key={a.id}
+                className="group cursor-pointer border-b border-slate-50 last:border-0 hover:bg-orange-50/50"
+                onClick={() => setRegisterId(a.id)}
+                title="View transactions in this account"
+              >
+                <td className="w-16 px-3 py-2.5 font-mono text-xs text-slate-400">{a.code}</td>
+                <td className="px-3 py-2.5 text-slate-800">
+                  <span className="inline-flex items-center gap-1.5">
+                    {a.is_bank === 1 && <Landmark size={14} className="text-brand-500" />}
+                    {a.name}
+                    {canEdit && (
+                      <button
+                        className="opacity-0 transition group-hover:opacity-100"
+                        title="Edit / renumber / merge"
+                        onClick={(e) => { e.stopPropagation(); setEditId(a.id) }}
+                      >
+                        <Pencil size={13} className="text-slate-400 hover:text-sonic-orange" />
+                      </button>
+                    )}
+                  </span>
+                </td>
+                <td className="px-3 py-2.5 text-xs text-slate-500">{TYPE_LABEL[a.type]}</td>
+                <td className="px-3 py-2.5 text-right">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Money cents={displayBalance(a)} />
+                    <ChevronRight size={14} className="text-slate-300 group-hover:text-sonic-orange" />
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {registerId != null && (

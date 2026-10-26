@@ -9,6 +9,9 @@ import type { Contact, ContactKind, DocType } from '../db/types'
 import { Money } from '../components/Money'
 import { ContactForm } from '../components/ContactForm'
 import { DocumentForm } from '../components/DocumentForm'
+import { useSort } from '../lib/useSort'
+import ExportButtons, { SortTh } from '../components/ExportButtons'
+import type { ExportTable } from '../lib/exporters'
 import { formatDate, todayISO } from '../lib/format'
 
 type Filter = 'all' | 'customer' | 'supplier'
@@ -75,6 +78,44 @@ export default function Contacts() {
   const customers = all.filter((c) => c.kind === 'customer' || c.kind === 'both').length
   const suppliers = all.filter((c) => c.kind === 'supplier' || c.kind === 'both').length
 
+  const { sorted, sortKey, sortDir, toggle } = useSort<ContactSummary>(
+    rows,
+    {
+      name: (c) => c.name.toLowerCase(),
+      type: (c) => c.kind,
+      balance: (c) => contactBalance(c),
+      txns: (c) => c.txn_count,
+      volume: (c) => c.gross,
+      last: (c) => c.last_date ?? '',
+    },
+    { key: 'name', dir: 'asc' },
+  )
+
+  const buildExport = (): ExportTable => {
+    const headers = ['Name']
+    const align: ('left' | 'right')[] = ['left']
+    if (cols.type) { headers.push('Type'); align.push('left') }
+    if (cols.balance) { headers.push('Balance'); align.push('right') }
+    if (cols.txns) { headers.push('Transactions'); align.push('right') }
+    if (cols.volume) { headers.push('Volume'); align.push('right') }
+    if (cols.last) { headers.push('Last activity'); align.push('left') }
+    const dollars = (n: number) => (n / 100).toFixed(2)
+    return {
+      filename: `contacts-${filter}`,
+      title: `Customers & Suppliers (${filter})`,
+      headers, align,
+      rows: sorted.map((c) => {
+        const row: (string | number)[] = [c.name]
+        if (cols.type) row.push(c.kind)
+        if (cols.balance) row.push(dollars(contactBalance(c)))
+        if (cols.txns) row.push(c.txn_count)
+        if (cols.volume) row.push(dollars(c.gross))
+        if (cols.last) row.push(c.last_date ? formatDate(c.last_date) : '')
+        return row
+      }),
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="flex items-start justify-between">
@@ -93,6 +134,8 @@ export default function Contacts() {
             </button>
           ))}
         </div>
+        <div className="flex items-center gap-2">
+        <ExportButtons build={buildExport} />
         <div className="relative">
           <button className="btn-outline" onClick={() => setShowCols((v) => !v)}><SlidersHorizontal size={15} /> Columns</button>
           {showCols && (
@@ -105,25 +148,26 @@ export default function Contacts() {
             </div>
           )}
         </div>
+        </div>
       </div>
 
       <div className="card overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <th className="px-5 py-2.5">Name</th>
-              {cols.type && <th className="px-2 py-2.5">Type</th>}
-              {cols.balance && <th className="px-2 py-2.5 text-right">Balance</th>}
-              {cols.txns && <th className="px-2 py-2.5 text-right">Transactions</th>}
-              {cols.volume && <th className="px-2 py-2.5 text-right">Volume</th>}
-              {cols.last && <th className="px-5 py-2.5 text-right">Last activity</th>}
+              <SortTh label="Name" sortKey="name" active={sortKey === 'name'} dir={sortDir} onClick={toggle} />
+              {cols.type && <SortTh label="Type" sortKey="type" active={sortKey === 'type'} dir={sortDir} onClick={toggle} />}
+              {cols.balance && <SortTh label="Balance" sortKey="balance" active={sortKey === 'balance'} dir={sortDir} onClick={toggle} align="right" />}
+              {cols.txns && <SortTh label="Transactions" sortKey="txns" active={sortKey === 'txns'} dir={sortDir} onClick={toggle} align="right" />}
+              {cols.volume && <SortTh label="Volume" sortKey="volume" active={sortKey === 'volume'} dir={sortDir} onClick={toggle} align="right" />}
+              {cols.last && <SortTh label="Last activity" sortKey="last" active={sortKey === 'last'} dir={sortDir} onClick={toggle} align="right" />}
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
+            {sorted.length === 0 && (
               <tr><td colSpan={6} className="px-5 py-8 text-center text-slate-400">No contacts yet. Add one, or they'll appear after a QuickBooks import.</td></tr>
             )}
-            {rows.map((c) => (
+            {sorted.map((c) => (
               <tr key={c.id} className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50" onClick={() => setSelectedId(c.id)}>
                 <td className="px-5 py-2.5 font-medium text-slate-800 hover:text-brand-600">{c.name}</td>
                 {cols.type && <td className="px-2 py-2.5"><span className={clsx('rounded px-1.5 py-0.5 text-xs font-medium capitalize', KIND_BADGE[c.kind])}>{c.kind}</span></td>}
