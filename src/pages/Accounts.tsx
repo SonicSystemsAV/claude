@@ -11,6 +11,11 @@ import type { ExportTable } from '../lib/exporters'
 import { formatDate } from '../lib/format'
 
 const TYPE_ORDER: AccountType[] = ['asset', 'liability', 'equity', 'income', 'expense']
+// Income/expense accounts are P&L — QuickBooks shows no "balance" for them on the
+// Chart of Accounts (their totals live on the Profit & Loss). Only balance-sheet
+// accounts carry a running balance here.
+const BALANCE_SHEET: AccountType[] = ['asset', 'liability', 'equity']
+const isBalanceSheet = (t: AccountType) => BALANCE_SHEET.includes(t)
 const TYPE_LABEL: Record<AccountType, string> = {
   asset: 'Assets',
   liability: 'Liabilities',
@@ -44,7 +49,7 @@ export default function Accounts() {
       code: (a) => a.code,
       name: (a) => a.name.toLowerCase(),
       type: (a) => TYPE_LABEL[a.type],
-      balance: (a) => displayBalance(a),
+      balance: (a) => (isBalanceSheet(a.type) ? displayBalance(a) : null),
     },
     { key: 'code', dir: 'asc' },
   )
@@ -57,7 +62,7 @@ export default function Accounts() {
     title: `Chart of Accounts — ${company?.name ?? ''}`.trim(),
     headers: ['Account #', 'Name', 'Type', 'Balance'],
     align: ['left', 'left', 'left', 'right'],
-    rows: sorted.map((a) => [a.code, a.name, TYPE_LABEL[a.type], (displayBalance(a) / 100).toFixed(2)]),
+    rows: sorted.map((a) => [a.code, a.name, TYPE_LABEL[a.type], isBalanceSheet(a.type) ? (displayBalance(a) / 100).toFixed(2) : '']),
   })
 
   return (
@@ -129,7 +134,7 @@ export default function Accounts() {
                 <td className="px-3 py-2.5 text-xs text-slate-500">{TYPE_LABEL[a.type]}</td>
                 <td className="px-3 py-2.5 text-right">
                   <span className="inline-flex items-center gap-1.5">
-                    <Money cents={displayBalance(a)} />
+                    {isBalanceSheet(a.type) ? <Money cents={displayBalance(a)} /> : <span className="text-slate-300">—</span>}
                     <ChevronRight size={14} className="text-slate-300 group-hover:text-sonic-orange" />
                   </span>
                 </td>
