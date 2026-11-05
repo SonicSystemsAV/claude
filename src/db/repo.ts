@@ -885,6 +885,19 @@ export function getAuditLog(companyId: number, limit = 500): AuditEntry[] {
 
 // ---- Detailed reports ------------------------------------------------------
 
+/** First and last calendar year that has (non-void) transactions, for building
+ *  comparative year-column reports. Null when the company has no transactions. */
+export function dataYearRange(companyId: number): { min: number; max: number } | null {
+  const r = one<{ mn: string | null; mx: string | null }>(
+    "SELECT MIN(t.date) AS mn, MAX(t.date) AS mx FROM transactions t WHERE t.company_id = ? AND t.status != 'void' AND t.deleted = 0",
+    [companyId],
+  )
+  if (!r || !r.mn || !r.mx) return null
+  const min = Number(String(r.mn).slice(0, 4)), max = Number(String(r.mx).slice(0, 4))
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null
+  return { min, max }
+}
+
 export interface LedgerRow {
   transaction_id: number
   date: string

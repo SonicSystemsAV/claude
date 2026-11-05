@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { clsx } from 'clsx'
-import { Star, Save, Trash2 } from 'lucide-react'
+import { Star, Save, Trash2, Columns3 } from 'lucide-react'
 import { useStore } from '../state/store'
 import {
   profitAndLossRange,
@@ -10,6 +10,7 @@ import {
   generalLedger,
   salesByCustomer,
   getAccounts,
+  dataYearRange,
 } from '../db/repo'
 import { aging, type AgingBuckets } from '../db/documents'
 import { Money } from '../components/Money'
@@ -62,10 +63,13 @@ export default function Reports() {
   const [end, setEnd] = useState(todayISO())
   const [asOf, setAsOf] = useState(todayISO())
   const [ledgerAccountId, setLedgerAccountId] = useState<number | ''>('')
+  const [byYear, setByYear] = useState(false)
   const [saved, setSaved] = useState<SavedReport[]>(() => (companyId ? loadSaved(companyId) : []))
   if (companyId == null) return null
 
   const company = companies.find((c) => c.id === companyId)
+  const canCompare = report === 'pnl' || report === 'balance'
+  const comparing = canCompare && byYear
   const opts = { start, end, asOf, ledgerAccountId }
 
   function saveCurrent() {
@@ -84,7 +88,10 @@ export default function Reports() {
     setSaved(next); storeSaved(companyId, next)
   }
 
-  const buildExport = (): ExportTable => buildReportExport(report, companyId, opts, company?.name ?? '')
+  const buildExport = (): ExportTable =>
+    comparing
+      ? buildComparativeExport(report as 'pnl' | 'balance', companyId, company?.name ?? '')
+      : buildReportExport(report, companyId, opts, company?.name ?? '')
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 p-6">
@@ -165,12 +172,22 @@ export default function Reports() {
             </select>
           </label>
         )}
+        {canCompare && (
+          <button
+            className={clsx('ml-auto inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition', byYear ? 'bg-brand-100 text-brand-700' : 'text-slate-500 hover:bg-slate-100')}
+            onClick={() => setByYear((v) => !v)}
+            title="Show a column for each year, like QuickBooks' comparative report"
+          >
+            <Columns3 size={13} /> {byYear ? 'By year ✓' : 'Compare by year'}
+          </button>
+        )}
       </div>
 
-      {report === 'pnl' && <PnlReport companyId={companyId} start={start} end={end} />}
+      {comparing && <ComparativeReport companyId={companyId} kind={report as 'pnl' | 'balance'} />}
+      {report === 'pnl' && !comparing && <PnlReport companyId={companyId} start={start} end={end} />}
       {report === 'ledger' && <LedgerReport companyId={companyId} accountId={ledgerAccountId} start={start} end={end} />}
       {report === 'sales' && <SalesReport companyId={companyId} start={start} end={end} />}
-      {report === 'balance' && <BalanceReport companyId={companyId} asOf={asOf} />}
+      {report === 'balance' && !comparing && <BalanceReport companyId={companyId} asOf={asOf} />}
       {report === 'trial' && <TrialReport companyId={companyId} asOf={asOf} />}
       {report === 'ar_aging' && <AgingReport companyId={companyId} which="ar" asOf={asOf} />}
       {report === 'ap_aging' && <AgingReport companyId={companyId} which="ap" asOf={asOf} />}
@@ -269,6 +286,103 @@ function buildReportExport(
       ['109', `Net tax — ${g.line109_netTax >= 0 ? 'to remit' : 'refund'}`, d(Math.abs(g.line109_netTax))],
     ],
   }
+}
+
+// ---- Comparative report (one column per year) ------------------------------
+
+interface CompRow { label: string; byYear: number[] | null; style: 'section' | 'line' | 'total' }
+type LineLike = { account: { id: number; code: string; name: string }; amount: number }
+
+function collectRows(perYearLines: LineLike[][], nYears: number): { label: string; byYear: number[] }[] {
+  const map = new Map<number, { label: string; byYear: number[] }>()
+  perYearLines.forEach((lines, i) => {
+    for (const l of lines) {
+      let row = map.get(l.account.id)
+      if (!row) { row = { label: `${l.account.code} ${l.account.name}`, byYear: Array(nYears).fill(0) }; map.set(l.account.id, row) }
+      row.byYear[i] = l.amount
+    }
+  })
+  return [...map.values()].filter((r) => r.byYear.some((v) => Math.abs(v) >= 1))
+}
+
+function buildComparative(companyId: number, kind: 'pnl' | 'balance'): { years: number[]; rows: CompRow[] } {
+  const range = dataYearRange(companyId)
+  if (!range) return { years: [], rows: [] }
+  const years: number[] = []
+  for (let y = range.min; y <= range.max; y++) years.push(y)
+  const rows: CompRow[] = []
+  const section = (label: string) => rows.push({ label, byYear: null, style: 'section' })
+  const line = (label: string, byYear: number[]) => rows.push({ label, byYear, style: 'line' })
+  const total = (label: string, byYear: number[]) => rows.push({ label, byYear, style: 'total' })
+  const n = years.length
+
+  if (kind === 'balance') {
+    const per = years.map((y) => balanceSheet(companyId, `${y}-12-31`))
+    section('Assets')
+    for (const r of collectRows(per.map((p) => p.assets), n)) line(r.label, r.byYear)
+    total('Total assets', per.map((p) => p.totalAssets))
+    section('Liabilities')
+    for (const r of collectRows(per.map((p) => p.liabilities), n)) line(r.label, r.byYear)
+    total('Total liabilities', per.map((p) => p.totalLiabilities))
+    section('Equity')
+    for (const r of collectRows(per.map((p) => p.equity), n)) line(r.label, r.byYear)
+    line('Net income (accumulated)', per.map((p) => p.netIncome))
+    total('Total equity', per.map((p) => p.totalEquity + p.netIncome))
+    total('Total liabilities & equity', per.map((p) => p.totalLiabEquity))
+  } else {
+    const per = years.map((y) => profitAndLossRange(companyId, `${y}-01-01`, `${y}-12-31`))
+    section('Income')
+    for (const r of collectRows(per.map((p) => p.income), n)) line(r.label, r.byYear)
+    total('Total income', per.map((p) => p.totalIncome))
+    section('Expenses')
+    for (const r of collectRows(per.map((p) => p.expenses), n)) line(r.label, r.byYear)
+    total('Total expenses', per.map((p) => p.totalExpense))
+    total('Net income', per.map((p) => p.net))
+  }
+  return { years, rows }
+}
+
+function buildComparativeExport(kind: 'pnl' | 'balance', companyId: number, companyName: string): ExportTable {
+  const { years, rows } = buildComparative(companyId, kind)
+  const safe = companyName.replace(/[^a-z0-9]+/gi, '_')
+  return {
+    filename: `${kind === 'pnl' ? 'profit-and-loss' : 'balance-sheet'}-by-year-${safe}`,
+    title: `${kind === 'pnl' ? 'Profit & Loss' : 'Balance Sheet'} by year — ${companyName}`,
+    headers: ['', ...years.map(String)],
+    align: ['left', ...years.map(() => 'right' as const)],
+    rows: rows.map((r) => [r.label, ...(r.byYear ? r.byYear.map(d) : years.map(() => ''))]),
+  }
+}
+
+function ComparativeReport({ companyId, kind }: { companyId: number; kind: 'pnl' | 'balance' }) {
+  const { years, rows } = buildComparative(companyId, kind)
+  if (years.length === 0) return <div className="card p-8 text-center text-slate-400">No transactions yet.</div>
+  return (
+    <div className="card overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <th className="sticky left-0 z-10 bg-slate-50 px-4 py-2 text-left">Account</th>
+            {years.map((y) => <th key={y} className="px-3 py-2 text-right font-semibold">{y}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className={clsx('border-b border-slate-50', r.style === 'total' && 'font-semibold text-slate-900')}>
+              <td className={clsx(
+                'sticky left-0 z-10 whitespace-nowrap px-4 py-1.5',
+                r.style === 'section' ? 'bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500' : 'bg-white',
+                r.style === 'line' && 'pl-8 text-slate-600',
+              )}>{r.label}</td>
+              {r.byYear
+                ? r.byYear.map((v, j) => <td key={j} className="px-3 py-1.5 text-right tabular-nums"><Money cents={v} className={clsx(v === 0 && 'text-slate-300')} /></td>)
+                : years.map((_, j) => <td key={j} className="bg-slate-50" />)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 // ---- Sub-reports (display) --------------------------------------------------
