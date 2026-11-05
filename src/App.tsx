@@ -375,16 +375,16 @@ function UserFooter({ rail }: { rail?: boolean }) {
   )
 }
 
-/** Small git build stamp so a refresh is self-verifying: match this against the
- *  commit Claude says is latest. In the desktop app it reads the REAL checked-out
- *  commit at runtime (via the current_rev command), because the build-time stamp
- *  freezes at dev-server start and lies after the code is pulled underneath a
- *  running Vite server. Falls back to the baked-in stamp when runtime git isn't
- *  available (e.g. the browser dev build). */
+/** Build stamp that tells the truth about the RUNNING UI.
+ *  The baked stamp (__BUILD_REV__) is the commit the running bundle / dev server
+ *  was actually built from — that's what's on screen. We also read the live git
+ *  HEAD (current_rev); when it's ahead of the running bundle, the checkout has
+ *  newer code that a plain reload won't show (common on a network drive where
+ *  Vite misses file changes), so we flag "restart to apply". */
 function BuildStamp() {
   const bakedRev = typeof __BUILD_REV__ === 'string' ? __BUILD_REV__ : 'unknown'
   const bakedTime = typeof __BUILD_TIME__ === 'string' ? __BUILD_TIME__ : ''
-  const [live, setLive] = useState<string | null>(null)
+  const [gitHead, setGitHead] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -394,15 +394,21 @@ function BuildStamp() {
         if (!isTauri()) return
         const { invoke } = await import('@tauri-apps/api/core')
         const rev = await invoke<string>('current_rev')
-        if (!cancelled && typeof rev === 'string' && rev.trim()) setLive(rev.trim())
-      } catch { /* fall back to the baked stamp */ }
+        if (!cancelled && typeof rev === 'string' && rev.trim()) setGitHead(rev.trim().split(' ')[0])
+      } catch { /* no runtime git — just show the baked stamp */ }
     })()
     return () => { cancelled = true }
   }, [])
 
+  const stale = gitHead != null && bakedRev !== 'unknown' && gitHead !== bakedRev
   return (
-    <div className="mt-3 select-text text-[11px] text-subtle" title="Code version currently checked out">
-      build <span className="font-mono text-nav-text">{live ?? `${bakedRev}${bakedTime ? ` · ${bakedTime}` : ''}`}</span>
+    <div className="mt-3 select-text text-[11px] text-subtle" title="The code version the running app was built from">
+      build <span className="font-mono text-nav-text">{bakedRev}{bakedTime ? ` · ${bakedTime}` : ''}</span>
+      {stale && (
+        <span className="mt-0.5 block text-amber-400">
+          newer code checked out ({gitHead}) — restart the app to apply
+        </span>
+      )}
     </div>
   )
 }
